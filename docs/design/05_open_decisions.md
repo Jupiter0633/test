@@ -45,8 +45,9 @@
 
 | ID | 항목 | 선택지 | 비고 |
 |---|---|---|---|
-| D-23 | 노트북(Windows 11, i7-1165G7 4코어, 16 GB, CUDA 없음)의 역할 | 개발·2D 검증 전용 / 2D 논문 계산까지 | 3D 논문 계산에는 부적합 (`01_environment_check.md` §4.1) |
-| D-24 | Windows 개발 도구 체계 | WSL2(Ubuntu) + gcc / Visual Studio(MSVC) | 권고: WSL2 — 워크스테이션이 Linux 일 경우 같은 빌드·스크립트를 그대로 사용 가능 |
+| D-23 | ~~노트북의 역할~~ | **확정 (2026-10-21): 프로그램 개발 전용. 논문 계산은 별개의 워크스테이션에서 수행** | 요구사항은 `01_environment_check.md` §4.3 |
+| D-24 | Windows 개발 도구 체계 | WSL2(Ubuntu) + gcc / Visual Studio(MSVC) | 권고: WSL2. 단, 워크스테이션 OS 가 정해지면 그에 맞춤 (Linux 면 WSL2, Windows 면 MSVC 빌드도 함께 시험) |
+| D-25 | 워크스테이션 사양·OS 확인 | — | 미확인. 3D 확장 범위(격자 크기, MPI, GPU) 결정의 전제 |
 
 ## D. 이번 작업에서 확인하지 못한 사항
 
