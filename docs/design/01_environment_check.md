@@ -72,7 +72,12 @@ nvidia-smi
 | RAM | 16,873,873,408 바이트 (약 15.7 GiB) |
 | GPU | Intel Iris Xe Graphics (내장 그래픽, 시스템 메모리 공유). AdapterRAM 1 GiB 로 표시되나 이 값은 내장 그래픽에서 실제 사용 가능량과 다를 수 있음 |
 | NVIDIA/CUDA | 없음 (`nvidia-smi` 명령 없음) |
-| 컴파일러·CMake·Python·MPI | 미확인 (이번에 실행하지 않음) |
+| WSL | 설치되어 있지 않음 (`wsl --status` 실행 시 설치 안내가 떴으나 취소되어 아무것도 설치되지 않음) |
+| C/C++ 컴파일러 | 없음 (`cl`, `gcc`, `g++` 모두 찾을 수 없음) |
+| CMake | 없음 |
+| MPI | 없음 (`mpiexec` 없음) |
+| Python | 3.12.10 (`C:\Users\User\AppData\Local\Programs\Python\Python312\python.exe`). `WindowsApps\python.exe` 는 Microsoft Store 실행 별칭 |
+| NumPy/SciPy/matplotlib | 미확인 |
 
 설계에 미치는 영향:
 - 2차원 축대칭 개발과 단계 1–2 검증 시험에는 충분할 것으로 예상합니다 (구현 후 실측 필요).
@@ -80,12 +85,9 @@ nvidia-smi
 - CUDA GPU 가 없으므로 GPU 이식은 이 기기에서 시험할 수 없습니다 (D-16).
 - Windows 이므로 빌드 체계는 CMake 공통으로 두고, 개발 도구는 WSL2(Ubuntu) 또는 Visual Studio(MSVC) 중 선택이 필요합니다 (D-07 에 추가).
 
-추가로 확인할 명령 (PowerShell, 읽기 전용):
-```powershell
-wsl --status; wsl -l -v
-where.exe cl gcc g++ cmake python mpiexec
-python --version
-```
+- **현재 C++ 코드를 빌드할 수 없습니다.** P0(빌드 체계) 착수 전에 C++ 개발 도구 설치가 필요합니다 (D-24). 설치는 사용자 결정 사항이며 이 문서 작성 과정에서는 설치하지 않았습니다.
+
+주의: `wsl --status` 는 WSL 이 없으면 설치 안내 프롬프트를 띄웁니다. 읽기 전용 확인에는 `where.exe wsl` 이나 `Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux` (관리자 권한 필요) 를 쓰는 편이 안전합니다.
 
 ### 4.2 논문 계산용 워크스테이션
 

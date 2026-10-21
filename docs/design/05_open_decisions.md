@@ -46,7 +46,7 @@
 | ID | 항목 | 선택지 | 비고 |
 |---|---|---|---|
 | D-23 | ~~노트북의 역할~~ | **확정 (2026-10-21): 프로그램 개발 전용. 논문 계산은 별개의 워크스테이션에서 수행** | 요구사항은 `01_environment_check.md` §4.3 |
-| D-24 | Windows 개발 도구 체계 | WSL2(Ubuntu) + gcc / Visual Studio(MSVC) | 권고: WSL2. 단, 워크스테이션 OS 가 정해지면 그에 맞춤 (Linux 면 WSL2, Windows 면 MSVC 빌드도 함께 시험) |
+| D-24 | Windows 개발 도구 체계 (**P0 착수 전 필수** — 노트북에 C++ 컴파일러·CMake·WSL 모두 없음, 2026-10-21 확인) | (a) WSL2(Ubuntu) + gcc + CMake / (b) Visual Studio Build Tools(MSVC) + CMake / (c) MSYS2(MinGW-w64 gcc) + CMake | 권고: 워크스테이션이 Linux 면 (a), Windows 면 (b). 워크스테이션 OS 를 모르면 (a) — Linux 계산 서버가 일반적이고 (a) 환경이 현재 설계 검토에 쓴 클라우드 환경(Ubuntu + gcc)과 같음. 어느 쪽이든 최종적으로 워크스테이션 빌드로 재검증 |
 | D-25 | 워크스테이션 사양·OS 확인 | — | 미확인. 3D 확장 범위(격자 크기, MPI, GPU) 결정의 전제 |
 
 ## D. 이번 작업에서 확인하지 못한 사항
