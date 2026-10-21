@@ -73,6 +73,12 @@ void test_pcg() {
   expect(err < 1e-8, "pcg solution accuracy");
   // 삼중대각에서 IC(0) 는 정확한 Cholesky → 한 번에 수렴
   expect(res.iterations <= 2, "IC(0) is exact for tridiagonal matrices");
+
+  // 도달 불가능한 허용치: 최대 반복까지 헛돌지 않고 정체로 멈춰야 한다
+  std::vector<double> y;
+  const SolveResult stalled = pcg(a, ic, b, y, 1e-30, 100000);
+  expect(!stalled.converged, "unreachable tolerance is reported as not converged");
+  expect(stalled.iterations < 2000, "stagnation stops the iteration early");
 }
 
 // 임의의 매끈한 속도장을 투영한 뒤 이산 발산이 반올림 수준인지

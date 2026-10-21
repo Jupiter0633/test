@@ -66,7 +66,9 @@ out\build\windows-x64-release\hcw_verify.exe all
 | P2 이후 | 미착수 | `04_development_phases.md` |
 
 ### P1 세부 상태
-- 클라우드(Linux, gcc 13.3)에서 `hcw_verify all` 전체 실행을 시작함. **결과는 이 문서를 쓰는 시점에 아직 나오지 않음.** 결과가 나오면 클라우드 세션이 `validation/records/P1-*.md` 로 올릴 예정 — 없으면 클라우드 결과는 없는 것으로 보고 노트북 결과만으로 판정 기록을 작성하세요.
+- 클라우드(Linux)에서 `hcw_verify all` 전체 실행 → **2시간 한도로 중단, 판정 결과 없음.** 원인: N=256 에서 고정 기준의 압력 해법 허용치(1e−12/1e−13)가 배정밀도 반올림 한계 아래라 도달 불가. 기록: `validation/records/P1-attempt-2026-10-21-linux.md`.
+- **P1 판정 전에 사용자 결정 필요: D-27** (`05_open_decisions.md`). 결정 없이 기준(허용치)을 바꾸지 말 것.
+- 정체 감지 수정 후 N=256 은 단계당 약 6.5 초(클라우드 기준)로 진행되지만 `FAILED_SOLVER` 로 표시됨.
 - 축소판(동작 확인용, 판정 아님)에서 1-A(b) 압력 L∞ 차수가 거친 격자에서 1.46 (기준 1.5). 전체 격자 결과로 판정하며, 불통과면 그대로 `FAILED_CRITERIA` 로 기록.
 - 축소판 확인 중 찾아 고친 버그 2개 (커밋 f330e84 에 포함, 회귀 시험 있음):
   1. 압력 정칙화 셀을 첫 셀에 두면 밀도비 1000 에서 IC(0) 마지막 피벗이 무너짐 → 마지막 셀로 이동.
@@ -81,7 +83,7 @@ out\build\windows-x64-release\hcw_verify.exe all
 
 1. GitHub Desktop: **Fetch origin → Pull origin**.
 2. 노트북에서 빌드 + `ctest` (빠른 시험 23개 통과 확인).
-3. 노트북에서 `hcw_verify.exe all` 실행 (수십 분 이상). `results\verification\P1\...\report.txt` 를 근거로 판정 기록 `validation/records/P1-exit-<날짜>.md` 작성. 기준은 절대 바꾸지 말 것.
+3. **D-27 결정을 먼저 받은 뒤**, 노트북에서 `hcw_verify.exe all` 실행 (수십 분 이상). `results\verification\P1\...\report.txt` 를 근거로 판정 기록 `validation/records/P1-exit-<날짜>.md` 작성. 기준은 절대 바꾸지 말 것.
 4. P1 판정에 따라:
    - 모두 `VERIFIED` → `04_development_phases.md` 진행 현황 갱신, P2 로.
    - `FAILED_*` → 원인 분석과 수정. 수정 후 다시 판정하되 **이전 불통과 기록은 남김**.
