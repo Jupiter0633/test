@@ -89,6 +89,17 @@ nvidia-smi
 
 주의: `wsl --status` 는 WSL 이 없으면 설치 안내 프롬프트를 띄웁니다. 읽기 전용 확인에는 `where.exe wsl` 이나 `Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux` (관리자 권한 필요) 를 쓰는 편이 안전합니다.
 
+### 4.1.1 노트북 개발 도구 설치 결과 (사용자 확인, 2026-10-21)
+
+| 항목 | 결과 |
+|---|---|
+| Visual Studio | Community 2026, v18.11.1 ("C++를 사용한 데스크톱 개발" 워크로드: MSVC 빌드 도구, C++ CMake 도구, Windows 11 SDK 10.0.26100, JIT 디버거, AddressSanitizer, vcpkg) |
+| C++ 컴파일러 | MSVC `cl` 19.51.36260 — 기본 Developer PowerShell 은 **x86** 대상으로 열림 |
+| CMake | 4.3.1-msvc1 (Visual Studio 포함본) |
+| GitHub Desktop | 설치·저장소 연결 완료 (설계 브랜치 추적) |
+
+주의: 해석기는 **64비트(x64)로 빌드**해야 합니다 (32비트는 메모리 약 4 GB 한계). CMake 의 Visual Studio 생성기를 `-A x64` 로 쓰거나, 명령줄 빌드는 "x64 Native Tools" 환경에서 수행합니다. 빌드 설정(P0)에서 x64 를 강제하고 32비트 빌드는 오류로 처리합니다.
+
 ### 4.2 논문 계산용 워크스테이션
 
 - 노트북과 별개 기기 (사용자 확정).
