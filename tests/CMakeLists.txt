@@ -2,6 +2,16 @@ add_executable(hcw_unit_tests test_p0.cpp)
 target_link_libraries(hcw_unit_tests PRIVATE hcw_core)
 add_test(NAME unit_p0 COMMAND hcw_unit_tests)
 
+add_executable(hcw_unit_tests_p1 test_p1.cpp)
+target_link_libraries(hcw_unit_tests_p1 PRIVATE hcw_flow)
+add_test(NAME unit_p1 COMMAND hcw_unit_tests_p1)
+
+# P1 검증 시험의 축소판 (동작 확인용, 판정 아님). 전체 판정은 hcw_verify all 로 따로 실행.
+foreach(t 1A 1B 1C 1D)
+  add_test(NAME verify_quick_${t} COMMAND hcw_verify ${t} --quick)
+  set_tests_properties(verify_quick_${t} PROPERTIES LABELS quick)
+endforeach()
+
 # 명령줄 시험: 매 실행마다 시험용 프로젝트 루트를 새로 복사한다.
 set(HCW_TEST_ROOT "${CMAKE_CURRENT_BINARY_DIR}/cli_root")
 add_test(NAME cli_setup

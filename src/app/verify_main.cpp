@@ -1,0 +1,165 @@
+// hcw_verify: P1 검증 시험 실행기.
+// 기준: docs/design/03_verification_plan.md §1.1 (기준 고정 커밋 35a77ac)
+// 결과는 화면과 results/verification/P1/<시험>/<UTC 시각>/report.txt 에 남긴다.
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "common/text.h"
+#include "io/case_policy.h"
+#include "io/run_metadata.h"
+#include "verify/p1_cases.h"
+
+namespace fs = std::filesystem;
+using namespace hcw;
+using namespace hcw::verify;
+
+namespace {
+
+const char* kCriteriaCommit = "35a77ac";
+
+std::string render(const TestReport& rep, const std::string& header) {
+  std::ostringstream o;
+  o.precision(6);
+  o << header;
+  o << "test     : " << rep.id << " - " << rep.title << "\n"
+    << "criteria : docs/design/03_verification_plan.md section 1.1 (locked in commit "
+    << kCriteriaCommit << ")\n\n";
+
+  // 지표 이름 모음
+  std::vector<std::string> keys;
+  for (const auto& run : rep.runs) {
+    for (const auto& [k, v] : run.metrics) {
+      if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+    }
+  }
+  for (const auto& run : rep.runs) {
+    o << "[" << run.label << "]";
+    if (!run.failure.empty()) o << "  " << run.failure;
+    o << "\n";
+    for (const auto& k : keys) {
+      const auto it = run.metrics.find(k);
+      if (it != run.metrics.end()) o << "  " << k << " = " << it->second << "\n";
+    }
+    o << "  poisson: solves " << run.stats.poisson_solves << ", max iterations "
+      << run.stats.max_poisson_iterations << ", max relative residual "
+      << run.stats.max_relative_residual << "\n"
+      << "  steps " << run.stats.steps << ", wall time " << run.seconds << " s\n";
+  }
+  // 연속 격자 사이 관측 차수 (참고용)
+  // 1-D 는 격자 세분화 시험이 아니므로 차수를 출력하지 않는다.
+  if (rep.runs.size() >= 2 && rep.id != "1-D") {
+    o << "\nobserved orders between successive grids:\n";
+    for (const auto& k : keys) {
+      if (k == "steps" || k == "final_step_change") continue;
+      o << "  " << k << ":";
+      for (std::size_t i = 0; i + 1 < rep.runs.size(); ++i) {
+        const auto a = rep.runs[i].metrics.find(k), b = rep.runs[i + 1].metrics.find(k);
+        if (a == rep.runs[i].metrics.end() || b == rep.runs[i + 1].metrics.end()) continue;
+        o << " " << observed_order(a->second, b->second);
+      }
+      o << "\n";
+    }
+  }
+  o << "\ncriteria:\n";
+  if (rep.criteria.empty()) o << "  (not evaluated because a run failed)\n";
+  for (const auto& c : rep.criteria) {
+    o << "  [" << (c.passed ? "PASS" : "FAIL") << "] " << c.text << "  (" << c.detail << ")\n";
+  }
+  for (const auto& n : rep.notes) o << "note: " << n << "\n";
+  o << "\nverdict  : " << rep.verdict << "\n";
+  return o.str();
+}
+
+std::string header_text(bool quick) {
+  const BuildInfo b = current_build_info();
+  std::ostringstream o;
+  o << "hcw_verify (P1)\n"
+    << "created  : " << utc_now_iso() << "\n"
+    << "build    : " << b.git_commit << " (" << b.git_tree_state << "), " << b.compiler << " ["
+    << b.build_config << "], " << b.platform << "\n"
+    << "machine  : " << current_machine_name() << ", hardware threads "
+    << std::thread::hardware_concurrency() << "\n"
+    << "mode     : " << (quick ? "QUICK (reduced grids, not a verification verdict)" : "FULL")
+    << "\n";
+  return o.str();
+}
+
+void save(const std::string& id, const std::string& text, bool quick) {
+  const auto root = find_project_root(fs::current_path());
+  if (!root) {
+    std::cout << "(not saved: run from inside the repository to save a report)\n";
+    return;
+  }
+  std::string folder = id;
+  for (char& c : folder) {
+    if (c == '(' || c == ')') c = '_';
+  }
+  const fs::path dir = *root / "results" / "verification" / "P1" / folder /
+                       (utc_now_compact() + (quick ? "_quick" : ""));
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+  std::ofstream out(dir / "report.txt", std::ios::binary);
+  out << text;
+  std::cout << "saved: " << (dir / "report.txt").string() << "\n";
+}
+
+void usage() {
+  std::cout << "usage: hcw_verify <1A | 1A-a | 1A-b | 1B | 1C | 1D | all> [--quick]\n"
+               "  --quick   reduced grids for a fast functional check (no verdict)\n"
+               "exit code: 0 if every requested test is VERIFIED (or quick mode), 4 otherwise\n";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  std::vector<std::string> args(argv + 1, argv + argc);
+  bool quick = false;
+  for (auto it = args.begin(); it != args.end();) {
+    if (*it == "--quick") {
+      quick = true;
+      it = args.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (args.size() != 1) {
+    usage();
+    return 1;
+  }
+  const std::string what = args[0];
+  std::vector<std::string> tests;
+  if (what == "all") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
+  else if (what == "1A") tests = {"1A-a", "1A-b"};
+  else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D")
+    tests = {what};
+  else {
+    usage();
+    return 1;
+  }
+
+  const std::string header = header_text(quick);
+  bool all_ok = true;
+  for (const auto& t : tests) {
+    std::cout << "running " << t << (quick ? " (quick)" : "") << " ...\n" << std::flush;
+    TestReport rep;
+    if (t == "1A-a") rep = run_1a(false, quick);
+    if (t == "1A-b") rep = run_1a(true, quick);
+    if (t == "1B") rep = run_1b(quick);
+    if (t == "1C") rep = run_1c(quick);
+    if (t == "1D") rep = run_1d(quick);
+    const std::string text = render(rep, header);
+    std::cout << text;
+    if (!quick) save(rep.id, text, quick);
+    std::cout << "\n";
+    if (!quick && rep.verdict != "VERIFIED") all_ok = false;
+    if (quick && rep.verdict != "QUICK_CHECK_ONLY") all_ok = false;
+  }
+  return all_ok ? 0 : 4;
+}

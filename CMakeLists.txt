@@ -56,6 +56,21 @@ add_dependencies(hcw_core hcw_build_info)
 add_executable(hcw src/app/main.cpp)
 target_link_libraries(hcw PRIVATE hcw_core)
 
+# P1: 단상·변수밀도 유동 해석기
+add_library(hcw_flow STATIC
+  src/flow/grid.cpp
+  src/flow/material.cpp
+  src/flow/poisson.cpp
+  src/flow/solver.cpp)
+target_include_directories(hcw_flow PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
+# P1 검증 시험 (docs/design/03_verification_plan.md §1.1)
+add_library(hcw_verify_p1 STATIC src/verify/p1_cases.cpp)
+target_link_libraries(hcw_verify_p1 PUBLIC hcw_flow)
+
+add_executable(hcw_verify src/app/verify_main.cpp)
+target_link_libraries(hcw_verify PRIVATE hcw_verify_p1 hcw_core)
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
