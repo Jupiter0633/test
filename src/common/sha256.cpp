@@ -20,17 +20,17 @@ std::uint32_t rotr(std::uint32_t x, int n) { return (x >> n) | (x << (32 - n)); 
 
 void compress(std::array<std::uint32_t, 8>& h, const unsigned char* block) {
   std::array<std::uint32_t, 64> w{};
-  for (int i = 0; i < 16; ++i) {
+  for (std::size_t i = 0; i < 16; ++i) {
     w[i] = (std::uint32_t(block[4 * i]) << 24) | (std::uint32_t(block[4 * i + 1]) << 16) |
            (std::uint32_t(block[4 * i + 2]) << 8) | std::uint32_t(block[4 * i + 3]);
   }
-  for (int i = 16; i < 64; ++i) {
+  for (std::size_t i = 16; i < 64; ++i) {
     const std::uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
     const std::uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
     w[i] = w[i - 16] + s0 + w[i - 7] + s1;
   }
   std::uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], k = h[7];
-  for (int i = 0; i < 64; ++i) {
+  for (std::size_t i = 0; i < 64; ++i) {
     const std::uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
     const std::uint32_t ch = (e & f) ^ (~e & g);
     const std::uint32_t t1 = k + s1 + ch + kRound[i] + w[i];
@@ -68,7 +68,7 @@ std::string sha256_hex(std::string_view data) {
   tail[rem] = 0x80;
   const std::size_t tail_len = (rem + 1 + 8 <= 64) ? 64 : 128;
   const std::uint64_t bit_len = std::uint64_t(n) * 8;
-  for (int i = 0; i < 8; ++i) {
+  for (std::size_t i = 0; i < 8; ++i) {
     tail[tail_len - 1 - i] = static_cast<unsigned char>(bit_len >> (8 * i));
   }
   compress(h, tail.data());
