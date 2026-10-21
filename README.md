@@ -8,14 +8,16 @@
 |---|---|---|
 | 설계 | 방법 선택, 검증 계획 | 완료 (`docs/design/`) |
 | **P0** | 빌드 틀, 입력 검사, 논문 조건 잠금, 실행 기록 | 완료. Linux·Windows(노트북) 시험 18/18 통과 |
-| P1 이후 | 유체·구조 계산 | 미착수 |
+| P1 | 단상·변수밀도 유동, 압력 해법 | 구현 완료, 검증 판정 대기 |
+| P2 이후 | 이동 물체, 자유수면, 구조 | 미착수 |
 
 **아직 계산 기능은 없습니다.** `hcw prepare` 는 입력과 출력 규칙만 확인하고 `PREPARED` 상태를 기록합니다.
 
 ## 문서
 
 - 설계 문서: [`docs/design/00_README.md`](docs/design/00_README.md)
-- 노트북 빌드·시험 안내: [`docs/P0_build_guide.md`](docs/P0_build_guide.md)
+- **인수인계 (새 세션은 여기부터)**: [`docs/HANDOFF.md`](docs/HANDOFF.md)
+- 노트북 빌드·시험 안내: [`docs/P0_build_guide.md`](docs/P0_build_guide.md), P1 검증: [`docs/P1_verification_guide.md`](docs/P1_verification_guide.md)
 
 ## 폴더 구조
 
