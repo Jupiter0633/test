@@ -97,6 +97,8 @@ nvidia-smi
 | C++ 컴파일러 | MSVC `cl` 19.51.36260 — 기본 Developer PowerShell 은 **x86** 대상으로 열림 |
 | CMake | 4.3.1-msvc1 (Visual Studio 포함본) |
 | GitHub Desktop | 설치·저장소 연결 완료 (설계 브랜치 추적) |
+| Git for Windows | 설치 완료 (명령줄 PATH 등록). 빌드 커밋 기록 정상 확인 |
+| 기기 이름 | DESKTOP-4JJOTVL, 하드웨어 스레드 8 — `config/machines.ini` 에 development 로 등록 |
 
 주의: 해석기는 **64비트(x64)로 빌드**해야 합니다 (32비트는 메모리 약 4 GB 한계). CMake 의 Visual Studio 생성기를 `-A x64` 로 쓰거나, 명령줄 빌드는 "x64 Native Tools" 환경에서 수행합니다. 빌드 설정(P0)에서 x64 를 강제하고 32비트 빌드는 오류로 처리합니다.
 
