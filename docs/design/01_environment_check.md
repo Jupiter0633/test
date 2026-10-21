@@ -59,7 +59,35 @@ nvidia-smi
 
 결과는 이 파일 §4에 붙여 넣어 기록합니다.
 
-## 4. 워크스테이션 확인 결과 (미기입)
+## 4. 사용자 기기 확인 결과
+
+### 4.1 노트북 (사용자가 PowerShell 로 직접 실행, 2026-10-21)
+
+이 기기가 논문 계산용 워크스테이션과 같은 기기인지는 **미확인**입니다.
+
+| 항목 | 확인 결과 |
+|---|---|
+| OS | Microsoft Windows 11 Pro, 버전 10.0.26200 |
+| CPU | 11th Gen Intel Core i7-1165G7 @ 2.80 GHz, 물리 코어 4 / 논리 프로세서 8 (저전력 노트북용 CPU) |
+| RAM | 16,873,873,408 바이트 (약 15.7 GiB) |
+| GPU | Intel Iris Xe Graphics (내장 그래픽, 시스템 메모리 공유). AdapterRAM 1 GiB 로 표시되나 이 값은 내장 그래픽에서 실제 사용 가능량과 다를 수 있음 |
+| NVIDIA/CUDA | 없음 (`nvidia-smi` 명령 없음) |
+| 컴파일러·CMake·Python·MPI | 미확인 (이번에 실행하지 않음) |
+
+설계에 미치는 영향:
+- 2차원 축대칭 개발과 단계 1–2 검증 시험에는 충분할 것으로 예상합니다 (구현 후 실측 필요).
+- **3차원 규칙파 해석(P9)의 논문 계산에는 부적합합니다.** 코어 4개, 메모리 약 16 GB, CUDA GPU 없음. 3차원 단계에는 별도 워크스테이션이 필요합니다.
+- CUDA GPU 가 없으므로 GPU 이식은 이 기기에서 시험할 수 없습니다 (D-16).
+- Windows 이므로 빌드 체계는 CMake 공통으로 두고, 개발 도구는 WSL2(Ubuntu) 또는 Visual Studio(MSVC) 중 선택이 필요합니다 (D-07 에 추가).
+
+추가로 확인할 명령 (PowerShell, 읽기 전용):
+```powershell
+wsl --status; wsl -l -v
+where.exe cl gcc g++ cmake python mpiexec
+python --version
+```
+
+### 4.2 논문 계산용 워크스테이션
 
 - 확인일: 미기입
-- 결과: 미기입
+- 결과: 미기입 (노트북과 다른 기기라면 §3 명령으로 확인 필요)
