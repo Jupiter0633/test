@@ -1,0 +1,4 @@
+[case]
+name = DEV_example
+purpose = development
+description = CLI test case

@@ -1,0 +1,14 @@
+# 빌드 산출물 (Visual Studio / CMake)
+/out/
+/build/
+/.vs/
+CMakeUserPresets.json
+
+# 계산 결과는 git 에 넣지 않는다 (용량). 결과 폴더 안내문만 추적.
+/results/*
+!/results/README.md
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
