@@ -184,6 +184,90 @@ void test_body_pressure() {
   expect(threw, "time stepping with a body is refused until near-body momentum exists");
 }
 
+// Lamb Art. 337 Stokes 해: 운동량 잔차, 그리고 격자에 넣었을 때 표면 힘 (압력 2πμaU + 점성 4πμaU)
+void test_stokes_exact() {
+  const double a = 1.0, U = 1.0, mu = 1.0;
+  auto vel = [&](double r, double z) { return verify::stokes_sphere_velocity(a, U, r, z); };
+  auto pre = [&](double r, double z) { return verify::stokes_sphere_pressure(a, U, mu, r, z); };
+  const double r = 0.8, z = 1.1, h = 1e-3;
+  auto lap = [&](int c, double rr, double zz) {
+    const double f0 = vel(rr, zz)[c];
+    const double frr = (vel(rr + h, zz)[c] - 2 * f0 + vel(rr - h, zz)[c]) / (h * h);
+    const double fr = (vel(rr + h, zz)[c] - vel(rr - h, zz)[c]) / (2 * h);
+    const double fzz = (vel(rr, zz + h)[c] - 2 * f0 + vel(rr, zz - h)[c]) / (h * h);
+    return frr + fr / rr + fzz - (c == 0 ? f0 / (rr * rr) : 0.0);
+  };
+  const double pr = (pre(r + h, z) - pre(r - h, z)) / (2 * h);
+  const double pz = (pre(r, z + h) - pre(r, z - h)) / (2 * h);
+  expect(std::abs(pr - mu * lap(0, r, z)) < 1e-5 && std::abs(pz - mu * lap(1, r, z)) < 1e-5,
+         "Stokes sphere: grad p = mu laplacian u");
+  const double div = ((r + h) * vel(r + h, z)[0] - (r - h) * vel(r - h, z)[0]) / (2 * h * r) +
+                     (vel(r, z + h)[1] - vel(r, z - h)[1]) / (2 * h);
+  // 중심 차분 절단 오차 O(h²) ≈ 3.5e−7 (h = 1e−3) 만 남는다 (h 를 줄이면 h² 로 줄어듦을 확인)
+  expect(std::abs(div) < 1e-6, "Stokes sphere: divergence-free");
+  expect(std::abs(vel(a * std::sin(0.7), a * std::cos(0.7))[1]) < 1e-14, "Stokes sphere: no-slip");
+
+  // 정확한 장을 격자에 넣고 표면 힘 적분 (a/Δ = 16)
+  const Grid g(Geometry::Axisymmetric, 64, 128, 0.0, 4.0, -4.0, 4.0);
+  body::Spheroid sphere(a, a);
+  const auto geom = body::cut_geometry(g, sphere, 0.0);
+  const auto mc = body::momentum_classes(g, sphere, 0.0);
+  flow::Array2D u(g.nr + 1, g.nz), w(g.nr, g.nz + 1), p(g.nr, g.nz);
+  for (int i = 0; i <= g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) u(i, j) = vel(g.rf(i), g.zc(j))[0];
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j <= g.nz; ++j) w(i, j) = vel(g.rc(i), g.zf(j))[1];
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) p(i, j) = pre(g.rc(i), g.zc(j));
+  }
+  const double fp = body::axial_pressure_force(g, geom, p);
+  const double fv = body::axial_viscous_force(g, geom, sphere, 0.0, w, mu);
+  expect(std::abs(fp / (2 * kPi * mu * a * U) - 1.0) < 0.03,
+         "Stokes sphere: pressure drag 2 pi mu a U (" + std::to_string(fp / (2 * kPi)) + ")");
+  expect(std::abs(fv / (4 * kPi * mu * a * U) - 1.0) < 0.03,
+         "Stokes sphere: viscous drag 4 pi mu a U (" + std::to_string(fv / (4 * kPi)) + ")");
+  expect(!mc.forcing.empty(), "faces next to the sphere are forcing faces");
+}
+
+// 반암시적 진행(step_implicit)의 정상 해 = 검증된 명시적 진행(step)의 정상 해 (물체 없음)
+void test_implicit_matches_explicit() {
+  auto make = [] {
+    flow::Problem pb;
+    pb.grid = Grid(Geometry::Axisymmetric, 8, 8, 0.0, 1.0, 0.0, 1.0);
+    pb.bc.r_min.kind = flow::BoundaryKind::Axis;
+    pb.bc.z_max.velocity = [](double r, double, double) {
+      return std::array<double, 2>{r * (1.0 - r), 0.0};  // 윗벽이 반경 방향으로 끌림
+    };
+    pb.material = std::make_shared<flow::SmoothMaterial>(
+        [](double, double, double) { return 1.0; }, [](double, double, double) { return 1.0; }, false);
+    return pb;
+  };
+  auto zero = [](double, double) { return 0.0; };
+  flow::FlowSolver ex(make()), im(make());
+  ex.initialize(0.0, zero, zero);
+  im.initialize(0.0, zero, zero);
+  const double dx = 1.0 / 8.0;
+  for (int k = 0; k < 4000; ++k) ex.step(0.2 * dx * dx);
+  int steps = 0;
+  do {
+    im.step_implicit(0.1);
+  } while (im.last_change() > 1e-13 && ++steps < 2000);
+  double diff = 0.0, umax = 0.0;
+  for (std::size_t q = 0; q < ex.u().data().size(); ++q) {
+    diff = std::max(diff, std::abs(ex.u().data()[q] - im.u().data()[q]));
+    umax = std::max(umax, std::abs(ex.u().data()[q]));
+  }
+  for (std::size_t q = 0; q < ex.w().data().size(); ++q) {
+    diff = std::max(diff, std::abs(ex.w().data()[q] - im.w().data()[q]));
+  }
+  expect(steps < 2000, "implicit stepping reaches a steady state");
+  expect(umax > 1e-3 && diff < 1e-9 * std::max(1.0, umax),
+         "implicit and explicit steady states agree (diff " + std::to_string(diff) + ")");
+  expect(!im.stats().solver_failed && !ex.stats().solver_failed, "solvers converged in both runs");
+}
+
 }  // namespace
 
 int main() {
@@ -191,6 +275,8 @@ int main() {
   test_cut_geometry();
   test_potential();
   test_body_pressure();
+  test_stokes_exact();
+  test_implicit_matches_explicit();
   std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   return g_failures == 0 ? 0 : 1;
 }

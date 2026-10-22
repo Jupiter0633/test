@@ -106,8 +106,11 @@ class FlowSolver {
   // 0 이 되어 no-slip 이 정확히 성립한다. 정상 상태 계산용이며 시간 정확도는 1차이다.
   void step_implicit(double dt);
 
-  // step_implicit 이 누적한 압력 (셀 중심, 유체 셀 평균 0)
+  // step_implicit 이 누적한 압력 (셀 중심, 유효 셀 평균 0)
   const Array2D& pressure() const { return p_inc_; }
+  // step_implicit 의 압력이 정의된 셀과 투영이 고치는 면 (운동량이 값을 정한 면은 막힘).
+  // 물체가 없으면 geometry() 와 같다.
+  const body::CutGeometry& pressure_geometry() const { return p_.body ? pgeom_ : geom_; }
 
   // 마지막 step_implicit 의 속도 변화: max|Δu| / max|u|
   double last_change() const { return last_change_; }
@@ -138,7 +141,7 @@ class FlowSolver {
   const MaterialArrays& material_at(double t);
   // 밀도는 시각 t_rho, 물체 위치는 시각 t_geom 의 압력 연산자
   Operator& operator_at(double t_rho, double t_geom);
-  void build_operator(const MaterialArrays& m, Operator& op) const;
+  void build_operator(const MaterialArrays& m, Operator& op, const body::CutGeometry& gm) const;
   void update_geometry(double t);
 
   void apply_boundary(Array2D& u, Array2D& w, double t) const;
@@ -189,6 +192,8 @@ class FlowSolver {
   double visc_time_ = -1.0;
   bool visc_valid_ = false;
   std::vector<double> mom_x_;  // 직전 운동량 해 (초기 추정)
+  body::CutGeometry pgeom_;    // 운동량 모드의 압력 기하
+  Operator op_mom_;            // 운동량 모드의 투영 연산자
 };
 
 }  // namespace hcw::flow

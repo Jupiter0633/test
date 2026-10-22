@@ -38,16 +38,21 @@ CutGeometry open_geometry(const flow::Grid& g);
 // 중심 높이 z_center 에 놓인 형상의 컷셀 기하. 축대칭 격자는 r0 = 0 이어야 한다.
 CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double z_center);
 
-// 운동량(속도 면) 분류 — 점성 흐름의 no-slip 처리 (Fadlun 형 직접 강제).
+// 운동량(속도 면) 분류 — 점성 흐름의 no-slip 처리 (Fadlun 형 직접 강제, 2차 보간).
 // 고체 면: 면 중심이 물체 안 → 물체 속도.
 // 경계 보간면: 면 중심은 유체이고 같은 성분의 이웃 면(±r 또는 ±z)이 고체 →
-//   그 방향의 물체 경계점 b 와 반대쪽 바깥 면 o 사이 직선 보간: u_f = (1 − w) u_b + w u_o,
-//   w = d_f / (d_f + h) (d_f: 면에서 경계까지 거리, h: 격자 간격). 2차 정확도.
+//   그 방향의 물체 경계점 b 와 반대쪽 바깥 면 o1, o2 를 지나는 2차 라그랑주 보간:
+//   u_f = w_b u_b + w1 u_o1 + w2 u_o2  (d: 면에서 경계까지 거리, h: 격자 간격)
+//   w_b = 2h²/((d+h)(d+2h)), w1 = 2d/(d+h), w2 = −d/(d+2h).
+//   o2 가 없거나 고체면 1차 (직선) 보간 w1 = d/(d+h), w2 = 0.
+// 벽 근처 속도가 3차, 벽 기울기(점성 견인력)가 2차 정확도가 되도록 2차 보간을 쓴다.
 struct FaceForcing {
   int comp = 0;    // 0: r 면(u), 1: z 면(w)
   int i = 0, j = 0;
-  int oi = 0, oj = 0;  // 바깥 면 o (같은 성분). weight = 0 이면 쓰지 않음.
-  double weight = 0.0;
+  int oi = 0, oj = 0;    // 바깥 면 o1 (같은 성분)
+  int oi2 = 0, oj2 = 0;  // 바깥 면 o2
+  double weight = 0.0;   // w1 (0 이면 o1 을 쓰지 않음 → 물체 속도)
+  double weight2 = 0.0;  // w2 (0 이면 o2 를 쓰지 않음)
 };
 
 struct MomentumClasses {

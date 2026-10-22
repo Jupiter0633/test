@@ -162,7 +162,7 @@ FlowSolver::Operator& FlowSolver::operator_at(double t_rho, double t_geom) {
   const bool fresh = op_.valid && (!p_.material->time_dependent() || op_.time == t_rho) &&
                      (!moving || op_.geometry_time == t_geom);
   if (!fresh) {
-    build_operator(material_at(t_rho), op_);
+    build_operator(material_at(t_rho), op_, geom_);
     op_.time = t_rho;
     op_.geometry_time = t_geom;
     op_.valid = true;
@@ -170,7 +170,8 @@ FlowSolver::Operator& FlowSolver::operator_at(double t_rho, double t_geom) {
   return op_;
 }
 
-void FlowSolver::build_operator(const MaterialArrays& m, Operator& op) const {
+void FlowSolver::build_operator(const MaterialArrays& m, Operator& op,
+                                const body::CutGeometry& gm) const {
   const Grid& g = p_.grid;
   const int n = g.nr * g.nz;
   std::vector<std::map<int, double>> rows(static_cast<std::size_t>(n));
@@ -187,20 +188,20 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op) const {
   for (int i = iu_lo_; i < iu_hi_; ++i) {
     const double area = g.metric(g.rf(i)) * g.dz;
     for (int j = 0; j < g.nz; ++j) {
-      const double open = geom_.open_u(i, j);
+      const double open = gm.open_u(i, j);
       if (open > 0.0) couple(cell(i - 1, j), cell(i, j), open * (area / (m.rho_u(i, j) * g.dr)));
     }
   }
   for (int i = 0; i < g.nr; ++i) {
     const double area = g.metric(g.rc(i)) * g.dr;
     for (int j = jw_lo_; j < jw_hi_; ++j) {
-      const double open = geom_.open_w(i, j);
+      const double open = gm.open_w(i, j);
       if (open > 0.0) couple(cell(i, j - 1), cell(i, j), open * (area / (m.rho_w(i, j) * g.dz)));
     }
   }
   // 고체로 가득 찬 셀은 다른 셀과 연결되지 않는 항등 행 (해 0)
   for (int c = 0; c < n; ++c) {
-    if (!geom_.active[static_cast<std::size_t>(c)]) rows[c][c] = 1.0;
+    if (!gm.active[static_cast<std::size_t>(c)]) rows[c][c] = 1.0;
   }
   // 압력은 상수만큼 미정 → 마지막 셀의 대각을 두 배로 해 정칙화한다.
   // 우변의 합이 0 이면 그 셀의 해가 0 이 되며 나머지 해는 바뀌지 않는다.
@@ -679,11 +680,15 @@ void FlowSolver::step_implicit(double dt) {
       const auto& f = *forcing[k];
       const double ub = f.comp == 0 ? 0.0 : ub_w;
       row.emplace_back(k, 1.0);
-      if (f.weight > 0.0) {
+      if (f.weight != 0.0) {
         const int ko = f.comp == 0 ? f.oi * nz + f.oj : nu + f.oi * (nz + 1) + f.oj;
         row.emplace_back(ko, -f.weight);
       }
-      b[k] = (1.0 - f.weight) * ub;
+      if (f.weight2 != 0.0) {
+        const int ko = f.comp == 0 ? f.oi2 * nz + f.oj2 : nu + f.oi2 * (nz + 1) + f.oj2;
+        row.emplace_back(ko, -f.weight2);
+      }
+      b[k] = (1.0 - f.weight - f.weight2) * ub;
     } else {
       // (1/Δt) u − A u = u^n/Δt + 명시적 항 + c − (1/ρ)∇p^n
       row.emplace_back(k, 1.0 / dt);
@@ -739,21 +744,96 @@ void FlowSolver::step_implicit(double dt) {
   // 증분이므로 0 이 가장 가까운 초기 추정
   phi_[0].hi.assign(phi_[0].hi.size(), 0.0);
   phi_[0].lo.assign(phi_[0].lo.size(), 0.0);
-  project(un, wn, t1, t1, phi_[0]);
-  // 증분 압력: 투영 퍼텐셜 φ = Δt · δp
+  // 회전형 압력 보정용: 투영 전 셀 발산 (b = −유출)
+  update_geometry(t1);
+  std::vector<double> b_raw;
+  face_flux_rhs(un, wn, ub_w, b_raw);
+  if (!p_.body) {
+    project(un, wn, t1, t1, phi_[0]);
+  } else {
+    // 운동량이 값을 정한 면(고체 면·경계 보간면)은 투영이 고치지 않고 알려진 플럭스로 둔다.
+    // 그렇지 않으면 투영과 운동량이 같은 면을 번갈아 고쳐 정상 상태에 닿지 못한다.
+    // 열린 면이 하나도 고칠 수 없는 셀은 압력 미지수에서 빠진다 (발산은 그 셀에 남는다).
+    pgeom_ = geom_;
+    for (int i = iu_lo_; i < iu_hi_; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = jw_lo_; j < jw_hi_; ++j) {
+        if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] != 0) pgeom_.open_w(i, j) = 0.0;
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        const bool west = !(g.geometry == Geometry::Axisymmetric && i == 0) && pgeom_.open_u(i, j) > 0.0;
+        const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
+                         pgeom_.open_w(i, j + 1) > 0.0;
+        pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
+      }
+    }
+    if (!pgeom_.active.back()) {
+      throw std::invalid_argument("the last cell (pressure reference) must be in the fluid");
+    }
+    if (!op_mom_.valid || p_.body->moving() || p_.material->time_dependent()) {
+      build_operator(m, op_mom_, pgeom_);
+      op_mom_.valid = true;
+    }
+    std::vector<double> div_b = b_raw;  // 원래 열린 비율로 잰 발산
+    double s = 0.0;
+    std::size_t count = 0;
+    for (std::size_t c = 0; c < div_b.size(); ++c) {
+      if (!pgeom_.active[c]) {
+        div_b[c] = 0.0;
+      } else {
+        s += div_b[c];
+        ++count;
+      }
+    }
+    for (std::size_t c = 0; c < div_b.size(); ++c) {
+      if (pgeom_.active[c]) div_b[c] -= s / static_cast<double>(count);
+    }
+    Potential& phi = phi_[0];
+    record(refined_solve(op_mom_.matrix, op_mom_.preconditioner, div_b, phi.hi, phi.lo,
+                         opt_.projection_tolerance, opt_.max_iterations),
+           opt_.projection_tolerance);
+    auto diff = [&](std::size_t k1, std::size_t k0) {
+      return (phi.hi[k1] - phi.hi[k0]) + (phi.lo[k1] - phi.lo[k0]);
+    };
+    for (int i = iu_lo_; i < iu_hi_; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        if (pgeom_.open_u(i, j) <= 0.0) continue;
+        const std::size_t k1 = static_cast<std::size_t>(i) * nz + j;
+        un(i, j) -= diff(k1, k1 - static_cast<std::size_t>(nz)) / (m.rho_u(i, j) * g.dr);
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = jw_lo_; j < jw_hi_; ++j) {
+        if (pgeom_.open_w(i, j) <= 0.0) continue;
+        const std::size_t k1 = static_cast<std::size_t>(i) * nz + j;
+        wn(i, j) -= diff(k1, k1 - 1) / (m.rho_w(i, j) * g.dz);
+      }
+    }
+  }
+  // 증분 압력, 회전형 (Timmermans 형): p += φ/Δt − μ ∇·u*.  φ = Δt · δp (투영 퍼텐셜).
+  // 둘째 항은 정상 상태에서 0 이므로 정상 해를 바꾸지 않으며, 큰 Δt 에서 압력 수렴을 빠르게 한다
+  // (Stokes 에서 Uzawa 반복과 같은 꼴).
+  const body::CutGeometry& pg = pressure_geometry();
   double sum = 0.0, vol = 0.0;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < nz; ++j) {
       const std::size_t k = static_cast<std::size_t>(i) * nz + j;
-      if (!geom_.active[k]) continue;
-      p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / dt;
+      if (!pg.active[k]) continue;
+      const double div = -b_raw[k] / g.cell_volume(i);
+      p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / dt - m.mu_cell(i, j) * div;
       sum += p_inc_(i, j) * g.cell_volume(i);
       vol += g.cell_volume(i);
     }
   }
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < nz; ++j) {
-      p_inc_(i, j) = geom_.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - sum / vol : 0.0;
+      p_inc_(i, j) = pg.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - sum / vol : 0.0;
     }
   }
 

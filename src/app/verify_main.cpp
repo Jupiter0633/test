@@ -138,10 +138,10 @@ int main(int argc, char** argv) {
   const std::string what = args[0];
   std::vector<std::string> tests;
   if (what == "all" || what == "P1") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
-  else if (what == "P2") tests = {"1E", "1F", "1H"};
+  else if (what == "P2") tests = {"1E", "1F", "1G", "1H"};
   else if (what == "1A") tests = {"1A-a", "1A-b"};
   else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D" ||
-           what == "1E" || what == "1F" || what == "1H")
+           what == "1E" || what == "1F" || what == "1G" || what == "1H")
     tests = {what};
   else {
     usage();
@@ -160,6 +160,7 @@ int main(int argc, char** argv) {
     if (t == "1D") rep = run_1d(quick);
     if (t == "1E") rep = run_1e(quick);
     if (t == "1F") rep = run_1f(quick);
+    if (t == "1G") rep = run_1g(quick);
     if (t == "1H") rep = run_1h(quick);
     const std::string text = render(rep, header);
     std::cout << text;

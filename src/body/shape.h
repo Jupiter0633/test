@@ -28,6 +28,9 @@ class Shape {
 
   // 표면 위 점 (r, z) 에서 물체 바깥쪽 단위 법선 (n_r, n_z)
   virtual std::array<double, 2> outward_normal(double r, double z) const = 0;
+
+  // 표면까지의 부호 거리 (바깥 양수). 구·원기둥은 정확, 회전타원체는 표면 근처에서 2차 근사.
+  virtual double distance(double r, double z) const = 0;
 };
 
 // 회전타원체 r²/a² + z²/c² ≤ 1 (a: 반경 방향 반축, c: 축 방향 반축). a = c 이면 구.
@@ -39,6 +42,7 @@ class Spheroid final : public Shape {
   bool r_extent(double z, double& radius) const override;
   double half_height() const override { return c_; }
   std::array<double, 2> outward_normal(double r, double z) const override;
+  double distance(double r, double z) const override;
   double a() const { return a_; }
   double c() const { return c_; }
 
@@ -55,6 +59,7 @@ class Cylinder final : public Shape {
   bool r_extent(double z, double& radius) const override;
   double half_height() const override { return 0.5 * h_; }
   std::array<double, 2> outward_normal(double r, double z) const override;
+  double distance(double r, double z) const override;
   double a() const { return a_; }
   double h() const { return h_; }
 

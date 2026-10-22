@@ -1,5 +1,6 @@
 #include "body/shape.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -34,6 +35,14 @@ std::array<double, 2> Spheroid::outward_normal(double r, double z) const {
   return {nr / len, nz / len};
 }
 
+double Spheroid::distance(double r, double z) const {
+  // G = sqrt(r²/a² + z²/c²) − 1 의 1차 근사 G/|∇G| (구에서는 정확히 R − a)
+  const double q = std::sqrt((r / a_) * (r / a_) + (z / c_) * (z / c_));
+  if (q == 0.0) return -std::min(a_, c_);
+  const double gr = r / (a_ * a_ * q), gz = z / (c_ * c_ * q);
+  return (q - 1.0) / std::hypot(gr, gz);
+}
+
 Cylinder::Cylinder(double a, double h) : a_(a), h_(h) {
   if (!(a > 0.0 && h > 0.0)) throw std::invalid_argument("cylinder radius and height must be positive");
 }
@@ -60,6 +69,12 @@ std::array<double, 2> Cylinder::outward_normal(double r, double z) const {
   const double side = std::abs(a_ - r), cap = std::abs(0.5 * h_ - std::abs(z));
   if (side < cap) return {1.0, 0.0};
   return {0.0, z >= 0.0 ? 1.0 : -1.0};
+}
+
+double Cylinder::distance(double r, double z) const {
+  const double dr = r - a_, dz = std::abs(z) - 0.5 * h_;
+  if (dr <= 0.0 && dz <= 0.0) return std::max(dr, dz);
+  return std::hypot(std::max(dr, 0.0), std::max(dz, 0.0));
 }
 
 }  // namespace hcw::body

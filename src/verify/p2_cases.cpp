@@ -247,6 +247,68 @@ TestReport run_1f(bool quick) {
   return rep;
 }
 
+// ---------------------------------------------------------------- 1-G
+TestReport run_1g(bool quick) {
+  TestReport rep = p2_report("1-G", "Sphere in Stokes flow (Ua/nu = 1e-3): steady drag");
+  const double a = 1.0, rho = 1.0, U = 1.0, mu = 1000.0;
+  const double exact = 6.0 * kPi * mu * a * U;
+  // 후방 오일러 Δt (정상 해는 Δt 와 무관). 점성 시간 ρa²/μ 의 10 배.
+  const double dt = 10.0 * rho * a * a / mu;
+  const int max_steps = 20000;
+  const std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{8, 16, 32, 64};
+  for (int n : ns) {
+    rep.runs.push_back(guarded("a/dx=" + std::to_string(n), n, [&](GridRun& run) {
+      const auto t0 = std::chrono::steady_clock::now();
+      auto shape = std::make_shared<body::Spheroid>(a, a);
+      auto b = std::make_shared<flow::Body>();
+      b->shape = shape;  // 정지
+      Problem pb;
+      pb.grid = axisym_grid(4 * n, 8 * n, 4.0, -4.0, 4.0);
+      pb.body = b;
+      pb.bc.r_min.kind = BoundaryKind::Axis;
+      flow::WallVelocity v = [a, U](double r, double z, double) {
+        return stokes_sphere_velocity(a, U, r, z);
+      };
+      pb.bc.r_max.velocity = pb.bc.z_min.velocity = pb.bc.z_max.velocity = v;
+      pb.material = std::make_shared<flow::SmoothMaterial>(
+          [rho](double, double, double) { return rho; }, [mu](double, double, double) { return mu; },
+          false);
+      FlowSolver s(pb);
+      s.initialize(0.0, [](double, double) { return 0.0; }, [U](double, double) { return U; });
+      int steps = 0;
+      do {
+        s.step_implicit(dt);
+        ++steps;
+      } while (s.last_change() > 1e-12 && steps < max_steps && !s.stats().solver_failed);
+      // 압력은 운동량 모드의 압력 기하(압력이 정의된 셀)로 적분한다
+      const double fp = body::axial_pressure_force(s.grid(), s.pressure_geometry(), s.pressure());
+      const double fv = body::axial_viscous_force(s.grid(), s.geometry(), *shape, 0.0, s.w(), mu);
+      run.seconds = seconds_since(t0);
+      finish_run(run, s);
+      if (run.failure.empty() && s.last_change() > 1e-12) {
+        run.failure = "FAILED_NOT_STEADY (step change " + fmt(s.last_change()) + " after " +
+                      std::to_string(steps) + " steps)";
+      }
+      run.metrics["force"] = fp + fv;
+      run.metrics["force_pressure"] = fp;
+      run.metrics["force_viscous"] = fv;
+      run.metrics["force_exact"] = exact;
+      run.metrics["force_relative_error"] = std::abs(fp + fv - exact) / exact;
+      run.metrics["steps"] = steps;
+      run.metrics["final_step_change"] = s.last_change();
+      run.metrics["momentum_max_residual"] = s.stats().max_momentum_residual;
+    }));
+  }
+  if (all_ok(rep.runs)) add_star_criteria(rep, rep.runs);
+  rep.notes.push_back("exact drag 6 pi mu a U (Lamb 1932 Art. 337); outer boundary = exact Stokes flow (Art. 337 eq. 11)");
+  rep.notes.push_back("steady state: max velocity change per step / max velocity <= 1e-12 (as 1-B); "
+                      "backward-Euler viscous step, dt = 10 rho a^2/mu");
+  rep.notes.push_back("exact split: pressure 2 pi mu a U = " + fmt(exact / 3.0) + ", viscous 4 pi mu a U = " +
+                      fmt(2.0 * exact / 3.0) + " (reported, not a criterion)");
+  conclude(rep, quick);
+  return rep;
+}
+
 // ---------------------------------------------------------------- 1-H
 TestReport run_1h(bool quick) {
   TestReport rep = p2_report("1-H", "Body-fixed frame vs IBM (lab frame): flat disk, force at t = 0");

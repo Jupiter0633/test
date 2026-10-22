@@ -191,8 +191,16 @@ MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double
         f.j = j;
         f.oi = oi;
         f.oj = oj;
-        const bool outer_ok = oi >= 0 && oi < ni(comp) && oj >= 0 && oj < nj(comp) && !solid(comp, oi, oj);
-        f.weight = outer_ok ? best / (best + h) : 0.0;
+        auto usable = [&](int a, int b) { return a >= 0 && a < ni(comp) && b >= 0 && b < nj(comp) && !solid(comp, a, b); };
+        f.oi2 = oi + (oi - i);
+        f.oj2 = oj + (oj - j);
+        const double d = best;
+        if (usable(oi, oj) && usable(f.oi2, f.oj2)) {
+          f.weight = 2.0 * d / (d + h);
+          f.weight2 = -d / (d + 2.0 * h);
+        } else if (usable(oi, oj)) {
+          f.weight = d / (d + h);
+        }
         m.forcing.push_back(f);
       }
     }
