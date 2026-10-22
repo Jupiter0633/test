@@ -59,7 +59,7 @@ set_source_files_properties(src/io/run_metadata.cpp PROPERTIES OBJECT_DEPENDS ${
 add_executable(hcw src/app/main.cpp)
 target_link_libraries(hcw PRIVATE hcw_core)
 
-# P1: 단상·변수밀도 유동 해석기, P2: 물체 (형상, 컷셀, 표면 힘)
+# P1: 단상·변수밀도 유동 해석기, P2: 물체 (형상, 컷셀, 표면 힘), P3: 기하 VOF
 add_library(hcw_flow STATIC
   src/flow/grid.cpp
   src/flow/material.cpp
@@ -68,7 +68,9 @@ add_library(hcw_flow STATIC
   src/flow/solver.cpp
   src/body/shape.cpp
   src/body/cut_cell.cpp
-  src/body/force.cpp)
+  src/body/force.cpp
+  src/interface/plic.cpp
+  src/interface/vof.cpp)
 target_include_directories(hcw_flow PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # 검증 시험 (docs/design/03_verification_plan.md §1.1 P1, §1.2 P2)
@@ -76,7 +78,8 @@ add_library(hcw_verify_cases STATIC
   src/verify/report_util.cpp
   src/verify/p1_cases.cpp
   src/verify/potential.cpp
-  src/verify/p2_cases.cpp)
+  src/verify/p2_cases.cpp
+  src/verify/p3_cases.cpp)
 target_link_libraries(hcw_verify_cases PUBLIC hcw_flow)
 
 add_executable(hcw_verify src/app/verify_main.cpp)
