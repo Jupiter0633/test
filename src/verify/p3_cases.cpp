@@ -402,11 +402,14 @@ TestReport run_2a(bool quick) {
 // ---------------------------------------------------------------- 2-F
 TestReport run_2f(bool quick) {
   TestReport rep = p3_report("2-F", "Air springs: water column between two closed air pockets");
+  rep.criteria_commit = "a48d360";  // 해석해에 공기층 관성 포함 (03 §1.3 2-F 변경 기록)
   const double la = 0.2, lw = 1.0, p0 = 1e5, v0 = 0.01;
   const std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{8, 16, 32, 64};
   std::vector<std::vector<GridRun>> groups;
   for (double kappa : {1.4, 1.0}) {
-    const double omega = std::sqrt(kappa * p0 * (2.0 / la) / (kRhoW * lw));
+    // 유효 질량에 두 공기층의 관성 ρ_a L_a/3 씩을 넣는다 (§1.3 2-F, 2026-10-23 변경)
+    const double mass = kRhoW * lw + 2.0 * kRhoA * la / 3.0;
+    const double omega = std::sqrt(kappa * p0 * (2.0 / la) / mass);
     const double period = 2.0 * kPi / omega;
     const double dp_exact = kappa * p0 * (v0 / omega) / la;
     std::vector<GridRun> runs;
@@ -504,7 +507,7 @@ TestReport run_2f(bool quick) {
     }
     rep.runs.insert(rep.runs.end(), runs.begin(), runs.end());
     rep.notes.push_back("kappa=" + fmt(kappa) + ": exact omega = " + fmt(omega) + " rad/s, pressure amplitude " +
-                        fmt(dp_exact) + " Pa (derived, 03 section 1.3)");
+                        fmt(dp_exact) + " Pa (derived with air-layer inertia, 03 section 1.3)");
   }
   rep.notes.push_back("planar tube 0.1 m wide (2 cells), no gravity, inviscid; semi-implicit step (backward Euler, "
                       "incremental pressure) with dt = period / (50 L_a/dz); pressure = bottom pocket mean");
