@@ -2,8 +2,10 @@
 
 확인일: 2026-10-21. 확인 수단: 웹 검색 결과(서지 데이터베이스, 출판사 페이지, 저장소 기록, 인용 목록).
 **이번 작업에서 본문 전체를 직접 읽어 확인한 문헌은 없습니다.** 따라서 수치(표, 그래프 값)를 통과 기준으로 쓰기 전에 반드시 원문을 확인해야 합니다.
+(2026-10-22 추가: R-21, R-30 은 해당 쪽의 원문 이미지를 직접 읽어 확인했습니다. 책 전체를 읽은 것은 아닙니다.)
 
 확인 수준:
+- **원문 확인**: 해당 내용이 실린 쪽의 원문을 직접 읽어 확인.
 - **서지 확인**: 저자·제목·학술지·권·쪽 등을 두 곳 이상 또는 출판사/공식 기록에서 확인. 내용은 미확인.
 - **초록 확인**: 서지 + 초록(또는 공식 요약)의 내용까지 확인.
 - **2차 출처**: 내용을 다른 문헌의 인용·요약으로만 확인.
@@ -31,7 +33,7 @@
 | R-18 | U. Ghia, K. N. Ghia, C. T. Shin (1982), "High-Re solutions for incompressible flow using the Navier–Stokes equations and a multigrid method," J. Comput. Phys. 48(3):387–411 | 초록 확인 | 1-C | 표 수치는 원문 확인 필요 |
 | R-19 | A. Prosperetti (1981), "Motion of two superposed viscous fluids," Phys. Fluids 24(7):1217–1223, doi:10.1063/1.863522 | 서지 확인, 내용은 2차 출처 (라플라스 공간 해) | 2-C 감쇠 정성 비교 | 평면 문제. 축대칭 적용 미확인 |
 | R-20 | A. W. Leissa (1969), *Vibration of Plates*, NASA SP-160 | 서지 확인 (NASA NTRS) | 4-B | 원판 진동수 표 원문 확인 필요 |
-| R-21 | 원판(축 수직 운동)의 무한유체 부가질량 (8/3)ρa³ | 2차 출처 (검색된 강의자료·논문에서 확인), 원전(Lamb 등) 미확인 | 1-F | 자유수면 위 원판의 "절반" 값은 **미확인** |
+| R-21 | H. Lamb, *Hydrodynamics*, 6th ed., Cambridge Univ. Press (1932). 부가질량: 구 Art. 92 p.124 식 (3)–(4) (밀어낸 질량의 절반), 얇은 원판 Art. 102 p.139 식 (20) (2T = (8/3)ρa³U²), 타원체 Art. 114 p.153 식 (6)–(12) (k = α₀/(2−α₀), 구에서 1/2) | **원문 확인** (2026-10-22, 인터넷 아카이브 스캔본 `dli.ernet.3284` 의 해당 쪽 이미지를 직접 읽음. 1932년판은 공개 자료). 이전 수준: 2차 출처 | 1-E, 1-F | 납작한 회전타원체가 원판 값으로 수렴함을 수치 적분으로 확인 (두께비 0.01 에서 99.7 %, 제 계산). 자유수면 위 원판의 "절반" 값은 **여전히 미확인** |
 | R-22 | J. W. Glasheen, T. A. McMahon (1996), "Vertical water entry of disks at low Froude numbers," Phys. Fluids 8(8):2078–2083 | 서지 확인, 내용 미확인 | 3-H, 6-G 후보 | |
 | R-23 | E. V. Ermanyuk, M. Ohkusu (2005), "Impact of a disk on shallow water," J. Fluids Struct. 20(3):345–357 | 서지 확인, 내용 미확인 | 3-H, 6-G 후보 (얕은 수심) | |
 | R-24 | H. C. Mayer, R. Krechetnikov (2018), "Flat plate impact on water," J. Fluid Mech. 850 | 서지 확인 (권 확인, 쪽 미확인), 초록 일부만 확인 | 3-B, 3-H 후보 | 판 형상(원판 여부) 미확인 |
@@ -39,6 +41,7 @@
 | R-26 | P. J. Roache (1994), "Perspective: A method for uniform reporting of grid refinement studies," J. Fluids Eng. | 서지 일부 확인 (권·쪽 미확인) | GCI 원전 | |
 | R-27 | P. J. Roache (2002), "Code verification by the method of manufactured solutions," J. Fluids Eng. 124 | 서지 일부 확인 (포럼 BibTeX — 쪽 미확인) | MMS (1-A) | |
 | R-28 | ASME V&V 20-2009 (R2016), *Standard for Verification and Validation in Computational Fluid Dynamics and Heat Transfer* | 공식 요약 확인 (ASME 보도자료, ANSI) | 검증 불확도 u_val 기반 판정 틀 | 표준 원문 미확인. 판정식 세부(포함계수 등)는 원문 확인 후 확정 |
+| R-30 | H. Lamb (1932), R-21 과 같은 책. Stokes 항력과 유속장: Art. 337 p.598 식 (10)·(11)·(15) (6πμaU, 바깥 벽이 지름의 여러 배 떨어져도 결과가 크게 달라진다는 주의). Oseen 보정 6πμUa(1 + 3/8·Ua/ν): Art. 343 p.617 식 (16) | **원문 확인** (2026-10-22, R-21 과 같은 스캔본) | 1-G | |
 | R-29 | Shi, Qu, Liu, Zheng, Li (2026), "Influence of plate size on air cushioning during water entry," Phys. Rev. Fluids 11:104801 | 검색 결과로만 존재 확인, 내용 미확인 | 7-E 후보 | 최근 문헌. 원문 확인 전 사용 금지 |
 
 ## 확인하지 못해 본문에서 근거로 쓰지 않은 내용
