@@ -81,13 +81,8 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double zc) {
 
       const double full = g.metric(g.rc(i)) * g.dr;
       const double nz_area = full * (c.open_w(i, j) - c.open_w(i, j + 1));
-      if (nz_area == 0.0) continue;
 
-      BoundaryPiece p;
-      p.i = i;
-      p.j = j;
-      p.nz_area = nz_area;
-      // 대표점: 셀 경계와 물체 경계가 만나는 두 점의 중점.
+      // 셀 경계와 물체 경계가 만나는 점들
       const double r0 = g.rf(i), r1 = g.rf(i + 1), z0 = g.zf(j), z1 = g.zf(j + 1);
       std::vector<std::pair<double, double>> pts;
       for (double rr : {r0, r1}) {
@@ -102,22 +97,107 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double zc) {
         if (!shape.r_extent(zz - zc, radius)) continue;
         if (radius > r0 && radius < r1) pts.emplace_back(radius, zz);
       }
-      if (pts.size() == 2) {
+      const bool crossing = pts.size() == 2;
+      if (nz_area == 0.0 && !crossing) continue;
+
+      BoundaryPiece p;
+      p.i = i;
+      p.j = j;
+      p.nz_area = nz_area;
+      if (crossing) {
+        // 대표점: 두 교점의 중점, 길이: 현의 길이
         p.r = 0.5 * (pts[0].first + pts[1].first);
         p.z = 0.5 * (pts[0].second + pts[1].second);
+        p.length = std::hypot(pts[1].first - pts[0].first, pts[1].second - pts[0].second);
       } else {
-        // 경계가 셀 면과 겹치는 경우 (격자면에 맞는 물체): 고체가 더 많은 z 면 위의 고체 부분 중점
+        // 경계가 셀 면과 겹치는 경우 (격자면에 맞는 물체): 고체가 더 많은 z 면 위의 고체 부분
         const bool bottom = (1.0 - c.open_w(i, j)) >= (1.0 - c.open_w(i, j + 1));
         const double zf = bottom ? z0 : z1;
         double radius = r1;
         shape.r_extent(zf - zc, radius);
-        p.r = 0.5 * (r0 + std::min(r1, std::max(r0, radius)));
+        const double re = std::min(r1, std::max(r0, radius));
+        p.r = 0.5 * (r0 + re);
         p.z = zf;
+        p.length = re - r0;
       }
       c.pieces.push_back(p);
     }
   }
   return c;
+}
+
+MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double zc) {
+  MomentumClasses m;
+  const int nz = g.nz;
+  m.solid_u.assign(static_cast<std::size_t>(g.nr + 1) * nz, 0);
+  m.solid_w.assign(static_cast<std::size_t>(g.nr) * (nz + 1), 0);
+  for (int i = 0; i <= g.nr; ++i) {
+    for (int j = 0; j < nz; ++j) m.solid_u[static_cast<std::size_t>(i) * nz + j] = shape.inside(g.rf(i), g.zc(j) - zc);
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j <= nz; ++j) {
+      m.solid_w[static_cast<std::size_t>(i) * (nz + 1) + j] = shape.inside(g.rc(i), g.zf(j) - zc);
+    }
+  }
+
+  // comp 성분 면 (i, j) 의 위치·고체 여부
+  auto ni = [&](int comp) { return comp == 0 ? g.nr + 1 : g.nr; };
+  auto nj = [&](int comp) { return comp == 0 ? nz : nz + 1; };
+  auto solid = [&](int comp, int i, int j) {
+    return comp == 0 ? m.solid_u[static_cast<std::size_t>(i) * nz + j] != 0
+                     : m.solid_w[static_cast<std::size_t>(i) * (nz + 1) + j] != 0;
+  };
+  auto pos_r = [&](int comp, int i) { return comp == 0 ? g.rf(i) : g.rc(i); };
+  auto pos_z = [&](int comp, int j) { return comp == 0 ? g.zc(j) : g.zf(j); };
+
+  for (int comp = 0; comp < 2; ++comp) {
+    for (int i = 0; i < ni(comp); ++i) {
+      for (int j = 0; j < nj(comp); ++j) {
+        if (solid(comp, i, j)) continue;
+        const double r = pos_r(comp, i), z = pos_z(comp, j);
+        double best = -1.0, h = 0.0;
+        int oi = 0, oj = 0;
+        // −r 쪽 이웃이 고체: 수평선 위 고체 [0, R] 의 끝 R 이 경계 (볼록·축 포함이라 +r 쪽은 생기지 않음)
+        if (i - 1 >= 0 && solid(comp, i - 1, j)) {
+          double radius;
+          if (shape.r_extent(z - zc, radius)) {
+            const double d = std::max(0.0, r - radius);
+            if (best < 0.0 || d < best) {
+              best = d;
+              h = g.dr;
+              oi = i + 1;
+              oj = j;
+            }
+          }
+        }
+        // ∓z 쪽 이웃이 고체: 수직선 위 고체 [lo, hi] 의 끝
+        for (int s : {-1, +1}) {
+          const int jj = j + s;
+          if (jj < 0 || jj >= nj(comp) || !solid(comp, i, jj)) continue;
+          double lo, hi;
+          if (!shape.z_extent(r, lo, hi)) continue;
+          const double d = std::max(0.0, s < 0 ? z - (hi + zc) : (lo + zc) - z);
+          if (best < 0.0 || d < best) {
+            best = d;
+            h = g.dz;
+            oi = i;
+            oj = j - s;
+          }
+        }
+        if (best < 0.0) continue;
+        FaceForcing f;
+        f.comp = comp;
+        f.i = i;
+        f.j = j;
+        f.oi = oi;
+        f.oj = oj;
+        const bool outer_ok = oi >= 0 && oi < ni(comp) && oj >= 0 && oj < nj(comp) && !solid(comp, oi, oj);
+        f.weight = outer_ok ? best / (best + h) : 0.0;
+        m.forcing.push_back(f);
+      }
+    }
+  }
+  return m;
 }
 
 }  // namespace hcw::body

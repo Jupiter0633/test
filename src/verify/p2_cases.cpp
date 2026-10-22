@@ -33,6 +33,7 @@ struct ForceSetup {
   std::shared_ptr<const SpheroidPotential> outer;
   // 1-H: 물체 고정 좌표계 (물체 정지, 벽이 −A 로 가속, 유체에 관성력 −A)
   bool body_fixed_frame = false;
+  double z_offset = 0.0;  // 시각 0 의 물체 중심 높이 (IBM 모드만)
   double accel = 1.0;
   double rho = 1.0;
 };
@@ -45,7 +46,8 @@ double initial_force(const ForceSetup& su, GridRun& run) {
   auto body = std::make_shared<flow::Body>();
   body->shape = su.shape;
   if (!su.body_fixed_frame) {
-    body->motion.z = [A](double t) { return 0.5 * A * t * t; };
+    const double z0 = su.z_offset;
+    body->motion.z = [A, z0](double t) { return z0 + 0.5 * A * t * t; };
     body->motion.w = [A](double t) { return A * t; };
     body->motion.a = [A](double) { return A; };
   }
@@ -57,8 +59,9 @@ double initial_force(const ForceSetup& su, GridRun& run) {
   pb.bc.r_max.kind = pb.bc.z_min.kind = pb.bc.z_max.kind = BoundaryKind::Wall;
   if (su.outer) {
     auto pot = su.outer;
-    flow::WallVelocity v = [pot, A](double r, double z, double t) {
-      const double u = A * t, zc = 0.5 * A * t * t;
+    const double z0 = su.z_offset;
+    flow::WallVelocity v = [pot, A, z0](double r, double z, double t) {
+      const double u = A * t, zc = z0 + 0.5 * A * t * t;
       const auto e = pot->velocity(r, z - zc);
       return std::array<double, 2>{u * e[0], u * e[1]};
     };
@@ -247,6 +250,7 @@ TestReport run_1f(bool quick) {
 // ---------------------------------------------------------------- 1-H
 TestReport run_1h(bool quick) {
   TestReport rep = p2_report("1-H", "Body-fixed frame vs IBM (lab frame): flat disk, force at t = 0");
+  rep.criteria_commit = "d4c2574";  // 1-H 는 IBM 원판을 반 칸 어긋나게 두도록 변경 (03 §1.2 변경 기록)
   const double a = 1.0, h = 0.1, rho = 1.0, A = 1.0;
   const std::vector<int> ns = quick ? std::vector<int>{20, 40} : std::vector<int>{40, 80, 160};
   std::vector<double> f_ibm, f_bf;
@@ -258,7 +262,10 @@ TestReport run_1h(bool quick) {
       su.accel = A;
       su.rho = rho;
       GridRun r_ibm, r_bf;
+      su.z_offset = 0.5 * (a / n);  // IBM 모드: 반 칸 위 → 컷셀이 생긴다
       const double fi = initial_force(su, r_ibm);
+      run.metrics["ibm_cut_pieces"] = r_ibm.metrics.at("cut_pieces");
+      su.z_offset = 0.0;
       su.body_fixed_frame = true;
       const double fb = initial_force(su, r_bf);
       run.stats = r_ibm.stats;
@@ -293,7 +300,8 @@ TestReport run_1h(bool quick) {
     // ③ 차이가 격자를 곱게 할수록 감소
     rep.criteria.push_back(monotone(rep.runs, "relative_difference"));
   }
-  rep.notes.push_back("closed wall box r in [0,3], z in [-3,3]; the disk faces lie on grid faces");
+  rep.notes.push_back("closed wall box r in [0,3], z in [-3,3]; body-fixed mode: disk centred at z = 0 "
+                      "(faces on grid faces); IBM mode: disk centred at z = dx/2 (cut cells)");
   rep.notes.push_back("frame correction for the surface pressure force is zero (pressure is frame independent)");
   conclude(rep, quick);
   return rep;

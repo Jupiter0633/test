@@ -91,4 +91,15 @@ std::array<double, 2> SpheroidPotential::velocity(double r, double z) const {
   return {-phi_r, -phi_z};
 }
 
+std::array<double, 2> stokes_sphere_velocity(double a, double U, double r, double z) {
+  const double R2 = r * r + z * z, R = std::sqrt(R2), R3 = R2 * R, R5 = R3 * R2;
+  const double k = 0.25 * U * a * (R2 - a * a);
+  return {k * (-3.0 * z * r / R5), U * (1.0 - a / R) + k * (1.0 / R3 - 3.0 * z * z / R5)};
+}
+
+double stokes_sphere_pressure(double a, double U, double mu, double r, double z) {
+  const double R = std::sqrt(r * r + z * z);
+  return -1.5 * mu * a * U * z / (R * R * R);
+}
+
 }  // namespace hcw::verify

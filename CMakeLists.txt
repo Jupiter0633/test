@@ -61,6 +61,7 @@ add_library(hcw_flow STATIC
   src/flow/grid.cpp
   src/flow/material.cpp
   src/flow/poisson.cpp
+  src/flow/linear.cpp
   src/flow/solver.cpp
   src/body/shape.cpp
   src/body/cut_cell.cpp

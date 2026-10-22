@@ -6,6 +6,8 @@
 // 수평선과 만나는 고체 부분은 r 구간 [0, R] 하나이다. 이 성질로 면의 열린 비율을 정확히 구한다.
 // 근거: docs/design/02_design_document.md §3.4, 03_verification_plan.md §1.2
 
+#include <array>
+
 namespace hcw::body {
 
 class Shape {
@@ -23,6 +25,9 @@ class Shape {
 
   // 축 방향 크기 (중심에서 위·아래 끝까지 거리)
   virtual double half_height() const = 0;
+
+  // 표면 위 점 (r, z) 에서 물체 바깥쪽 단위 법선 (n_r, n_z)
+  virtual std::array<double, 2> outward_normal(double r, double z) const = 0;
 };
 
 // 회전타원체 r²/a² + z²/c² ≤ 1 (a: 반경 방향 반축, c: 축 방향 반축). a = c 이면 구.
@@ -33,6 +38,7 @@ class Spheroid final : public Shape {
   bool z_extent(double r, double& lo, double& hi) const override;
   bool r_extent(double z, double& radius) const override;
   double half_height() const override { return c_; }
+  std::array<double, 2> outward_normal(double r, double z) const override;
   double a() const { return a_; }
   double c() const { return c_; }
 
@@ -48,6 +54,7 @@ class Cylinder final : public Shape {
   bool z_extent(double r, double& lo, double& hi) const override;
   bool r_extent(double z, double& radius) const override;
   double half_height() const override { return 0.5 * h_; }
+  std::array<double, 2> outward_normal(double r, double z) const override;
   double a() const { return a_; }
   double h() const { return h_; }
 

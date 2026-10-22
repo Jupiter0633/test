@@ -36,4 +36,12 @@ class SpheroidPotential {
   double coef_;  // C / U
 };
 
+// 고정된 구(반지름 a)를 지나는 Stokes 유동, 무한 원방에서 균일 흐름 U (z 방향).
+// Lamb (1932) Art. 337 식 (11) [R-30] 을 축대칭 좌표로 옮긴 것 (Lamb 의 x 축 = 여기 z 축):
+//   u_z = U(1 − a/R) + ¼Ua(R² − a²)(1/R³ − 3z²/R⁵),  u_r = ¼Ua(R² − a²)(−3zr/R⁵),  R² = r² + z².
+// 압력 p = −(3/2) μ a U z / R³ (상수 제외)는 Stokes 식 ∇p = μ∇²u 를 만족하도록 유도한 것이며
+// 단위 시험에서 그 잔차를 수치로 확인한다. 항력 = 6πμaU (압력 2πμaU + 점성 4πμaU).
+std::array<double, 2> stokes_sphere_velocity(double a, double U, double r, double z);
+double stokes_sphere_pressure(double a, double U, double mu, double r, double z);
+
 }  // namespace hcw::verify

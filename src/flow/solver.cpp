@@ -4,6 +4,9 @@
 #include <cmath>
 #include <map>
 #include <stdexcept>
+#include <utility>
+
+#include "flow/linear.h"
 
 namespace hcw::flow {
 namespace {
@@ -64,6 +67,7 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
     phi.lo.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
   }
 
+  p_inc_ = Array2D(g.nr, g.nz);
   geom_ = body::open_geometry(g);
   geom_valid_ = !p_.body;
   if (p_.body) {
@@ -321,11 +325,12 @@ void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Pote
   }
 }
 
-void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw) {
+void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw,
+                     bool convection, bool viscous, bool forces) {
   const Grid& g = p_.grid;
   const MaterialArrays& m = material_at(t);
   const bool axisym = g.geometry == Geometry::Axisymmetric;
-  const bool has_source = static_cast<bool>(p_.source);
+  const bool has_source = forces && static_cast<bool>(p_.source);
   if (has_source) p_.source(t, su_, sw_);
   if (fu.ni() != g.nr + 1) fu = Array2D(g.nr + 1, g.nz);
   if (fw.ni() != g.nr) fw = Array2D(g.nr, g.nz + 1);
@@ -362,7 +367,10 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
       const double r_f = g.rf(i);
       const double hoop = axisym ? -2.0 * m.mu_u(i, j) * u(i, j) / (r_f * r_f) : 0.0;
 
-      double f = -(conv_r + conv_z) + (visc_r + visc_z + hoop) / m.rho_u(i, j) + p_.gravity[0];
+      // 항을 뺄 때는 0 으로 바꿀 뿐이라 전부 넣을 때(P1)의 계산 순서는 그대로다.
+      double f = (convection ? -(conv_r + conv_z) : 0.0) +
+                 (viscous ? (visc_r + visc_z + hoop) / m.rho_u(i, j) : 0.0) +
+                 (forces ? p_.gravity[0] : 0.0);
       if (has_source) f += su_(i, j);
       fu(i, j) = f;
     }
@@ -390,7 +398,9 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
       };
       const double visc_z = (tau_zz(j) - tau_zz(j - 1)) / g.dz;
 
-      double f = -(conv_r + conv_z) + (visc_r + visc_z) / m.rho_w(i, j) + p_.gravity[1];
+      double f = (convection ? -(conv_r + conv_z) : 0.0) +
+                 (viscous ? (visc_r + visc_z) / m.rho_w(i, j) : 0.0) +
+                 (forces ? p_.gravity[1] : 0.0);
       if (has_source) f += sw_(i, j);
       fw(i, j) = f;
     }
@@ -526,6 +536,241 @@ double FlowSolver::max_divergence() const {
     }
   }
   return worst;
+}
+
+void FlowSolver::viscous_matrix(double t, CsrMatrix& a) {
+  const Grid& g = p_.grid;
+  const int nz = g.nz;
+  const int nu = (g.nr + 1) * nz;
+  const int n = nu + g.nr * (nz + 1);
+  Array2D zu(g.nr + 1, nz), zw(g.nr, nz + 1), fu0, fw0, fu, fw;
+  rhs(zu, zw, t, fu0, fw0, false, true, false);  // 상수 부분 c (벽 속도)
+
+  std::vector<std::vector<std::pair<int, double>>> cols(static_cast<std::size_t>(n));
+  // 점성 이산식은 한 면에서 각 방향 ±1 칸 안의 면만 쓴다 → 3×3 색칠로 탐침이 겹치지 않는다.
+  for (int comp = 0; comp < 2; ++comp) {
+    for (int ci = 0; ci < 3; ++ci) {
+      for (int cj = 0; cj < 3; ++cj) {
+        Array2D pu(g.nr + 1, nz), pw(g.nr, nz + 1);
+        Array2D& pert = comp == 0 ? pu : pw;
+        for (int i = ci; i < pert.ni(); i += 3) {
+          for (int j = cj; j < pert.nj(); j += 3) pert(i, j) = 1.0;
+        }
+        rhs(pu, pw, t, fu, fw, false, true, false);
+        // 값이 바뀐 행마다, 같은 색의 섭동 면 중 ±1 칸 안의 유일한 면이 그 열이다.
+        auto owner = [&](int ri, int rj) {
+          for (int i = ri - 1; i <= ri + 1; ++i) {
+            for (int j = rj - 1; j <= rj + 1; ++j) {
+              if (i < 0 || j < 0 || i >= pert.ni() || j >= pert.nj()) continue;
+              if (i % 3 == ci && j % 3 == cj) return comp == 0 ? i * nz + j : nu + i * (nz + 1) + j;
+            }
+          }
+          throw std::logic_error("viscous probe: no owner column");
+        };
+        for (int i = 0; i <= g.nr; ++i) {
+          for (int j = 0; j < nz; ++j) {
+            const double d = fu(i, j) - fu0(i, j);
+            if (d != 0.0) cols[static_cast<std::size_t>(i * nz + j)].emplace_back(owner(i, j), d);
+          }
+        }
+        for (int i = 0; i < g.nr; ++i) {
+          for (int j = 0; j <= nz; ++j) {
+            const double d = fw(i, j) - fw0(i, j);
+            if (d != 0.0) {
+              cols[static_cast<std::size_t>(nu + i * (nz + 1) + j)].emplace_back(owner(i, j), d);
+            }
+          }
+        }
+      }
+    }
+  }
+  a.n = n;
+  a.row_start.assign(static_cast<std::size_t>(n) + 1, 0);
+  a.col.clear();
+  a.val.clear();
+  for (int r = 0; r < n; ++r) {
+    auto& row = cols[static_cast<std::size_t>(r)];
+    std::sort(row.begin(), row.end());
+    for (const auto& [c, v] : row) {
+      a.col.push_back(c);
+      a.val.push_back(v);
+    }
+    a.row_start[r + 1] = static_cast<int>(a.col.size());
+  }
+}
+
+void FlowSolver::step_implicit(double dt) {
+  const Grid& g = p_.grid;
+  const int nz = g.nz;
+  const int nu = (g.nr + 1) * nz;
+  const int n = nu + g.nr * (nz + 1);
+  const double t1 = t_ + dt;
+
+  // 명시적 부분 (시각 t): 대류 + 중력·원천
+  Array2D fu, fw;
+  rhs(u_, w_, t_, fu, fw, true, false, true);
+  // 점성 부분 (시각 t1): V(u) = A u + c
+  if (!visc_valid_ || (p_.material->time_dependent() && visc_time_ != t1)) {
+    viscous_matrix(t1, visc_);
+    visc_time_ = t1;
+    visc_valid_ = true;
+  }
+  Array2D zu(g.nr + 1, nz), zw(g.nr, nz + 1), cu, cw;
+  rhs(zu, zw, t1, cu, cw, false, true, false);
+  const MaterialArrays& m = material_at(t1);
+
+  // 경계 면의 값 (시각 t1)
+  Array2D bu = u_, bw = w_;
+  apply_boundary(bu, bw, t1);
+
+  body::MomentumClasses mc;
+  double ub_w = 0.0;
+  if (p_.body) {
+    mc = body::momentum_classes(g, *p_.body->shape, p_.body->z(t1));
+    ub_w = p_.body->w(t1);
+  }
+  // 행 종류: 0 유체(운동량), 1 고정값, 2 경계 보간
+  std::vector<char> kind(static_cast<std::size_t>(n), 0);
+  std::vector<double> fixed(static_cast<std::size_t>(n), 0.0);
+  std::vector<const body::FaceForcing*> forcing(static_cast<std::size_t>(n), nullptr);
+  for (int i = 0; i <= g.nr; ++i) {
+    for (int j = 0; j < nz; ++j) {
+      const int k = i * nz + j;
+      if (!solves_u(i)) {
+        kind[k] = 1;
+        fixed[k] = bu(i, j);
+      } else if (p_.body && mc.solid_u[static_cast<std::size_t>(k)]) {
+        kind[k] = 1;
+        fixed[k] = 0.0;
+      }
+    }
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j <= nz; ++j) {
+      const int k = nu + i * (nz + 1) + j;
+      if (!solves_w(j)) {
+        kind[k] = 1;
+        fixed[k] = bw(i, j);
+      } else if (p_.body && mc.solid_w[static_cast<std::size_t>(i) * (nz + 1) + j]) {
+        kind[k] = 1;
+        fixed[k] = ub_w;
+      }
+    }
+  }
+  for (const auto& f : mc.forcing) {
+    const int k = f.comp == 0 ? f.i * nz + f.j : nu + f.i * (nz + 1) + f.j;
+    if (kind[k] != 0) continue;  // 바깥 경계 면은 그대로
+    kind[k] = 2;
+    forcing[k] = &f;
+  }
+
+  // 행렬과 우변
+  CsrMatrix a;
+  a.n = n;
+  a.row_start.assign(static_cast<std::size_t>(n) + 1, 0);
+  std::vector<double> b(static_cast<std::size_t>(n), 0.0);
+  std::vector<std::pair<int, double>> row;
+  for (int k = 0; k < n; ++k) {
+    row.clear();
+    if (kind[k] == 1) {
+      row.emplace_back(k, 1.0);
+      b[k] = fixed[k];
+    } else if (kind[k] == 2) {
+      const auto& f = *forcing[k];
+      const double ub = f.comp == 0 ? 0.0 : ub_w;
+      row.emplace_back(k, 1.0);
+      if (f.weight > 0.0) {
+        const int ko = f.comp == 0 ? f.oi * nz + f.oj : nu + f.oi * (nz + 1) + f.oj;
+        row.emplace_back(ko, -f.weight);
+      }
+      b[k] = (1.0 - f.weight) * ub;
+    } else {
+      // (1/Δt) u − A u = u^n/Δt + 명시적 항 + c − (1/ρ)∇p^n
+      row.emplace_back(k, 1.0 / dt);
+      for (int q = visc_.row_start[k]; q < visc_.row_start[k + 1]; ++q) {
+        row.emplace_back(visc_.col[q], -visc_.val[q]);
+      }
+      if (k < nu) {
+        const int i = k / nz, j = k % nz;
+        const double grad = (p_inc_(i, j) - p_inc_(i - 1, j)) / (m.rho_u(i, j) * g.dr);
+        b[k] = u_(i, j) / dt + fu(i, j) + cu(i, j) - grad;
+      } else {
+        const int i = (k - nu) / (nz + 1), j = (k - nu) % (nz + 1);
+        const double grad = (p_inc_(i, j) - p_inc_(i, j - 1)) / (m.rho_w(i, j) * g.dz);
+        b[k] = w_(i, j) / dt + fw(i, j) + cw(i, j) - grad;
+      }
+    }
+    std::sort(row.begin(), row.end());
+    for (const auto& [c, v] : row) {  // 같은 열은 합친다
+      if (static_cast<int>(a.col.size()) > a.row_start[k] && a.col.back() == c) {
+        a.val.back() += v;
+      } else {
+        a.col.push_back(c);
+        a.val.push_back(v);
+      }
+    }
+    a.row_start[k + 1] = static_cast<int>(a.col.size());
+  }
+  Ilu0 ilu;
+  ilu.factor(a);
+  if (mom_x_.size() != static_cast<std::size_t>(n)) {
+    mom_x_.assign(static_cast<std::size_t>(n), 0.0);
+    for (int i = 0; i <= g.nr; ++i) {
+      for (int j = 0; j < nz; ++j) mom_x_[static_cast<std::size_t>(i * nz + j)] = u_(i, j);
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j <= nz; ++j) mom_x_[static_cast<std::size_t>(nu + i * (nz + 1) + j)] = w_(i, j);
+    }
+  }
+  const SolveResult res = bicgstab(a, ilu, b, mom_x_, 1e-12, opt_.max_iterations);
+  stats_.momentum_solves += 1;
+  stats_.momentum_iterations += res.iterations;
+  stats_.max_momentum_residual = std::max(stats_.max_momentum_residual, res.relative_residual);
+  if (!res.converged) stats_.solver_failed = true;
+
+  Array2D un = u_, wn = w_;
+  for (int i = 0; i <= g.nr; ++i) {
+    for (int j = 0; j < nz; ++j) un(i, j) = mom_x_[static_cast<std::size_t>(i * nz + j)];
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j <= nz; ++j) wn(i, j) = mom_x_[static_cast<std::size_t>(nu + i * (nz + 1) + j)];
+  }
+  apply_boundary(un, wn, t1);
+  // 증분이므로 0 이 가장 가까운 초기 추정
+  phi_[0].hi.assign(phi_[0].hi.size(), 0.0);
+  phi_[0].lo.assign(phi_[0].lo.size(), 0.0);
+  project(un, wn, t1, t1, phi_[0]);
+  // 증분 압력: 투영 퍼텐셜 φ = Δt · δp
+  double sum = 0.0, vol = 0.0;
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < nz; ++j) {
+      const std::size_t k = static_cast<std::size_t>(i) * nz + j;
+      if (!geom_.active[k]) continue;
+      p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / dt;
+      sum += p_inc_(i, j) * g.cell_volume(i);
+      vol += g.cell_volume(i);
+    }
+  }
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < nz; ++j) {
+      p_inc_(i, j) = geom_.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - sum / vol : 0.0;
+    }
+  }
+
+  double du = 0.0, umax = 0.0;
+  for (std::size_t q = 0; q < un.data().size(); ++q) {
+    du = std::max(du, std::abs(un.data()[q] - u_.data()[q]));
+    umax = std::max(umax, std::abs(un.data()[q]));
+  }
+  for (std::size_t q = 0; q < wn.data().size(); ++q) {
+    du = std::max(du, std::abs(wn.data()[q] - w_.data()[q]));
+    umax = std::max(umax, std::abs(wn.data()[q]));
+  }
+  last_change_ = umax > 0.0 ? du / umax : 0.0;
+  u_ = un;
+  w_ = wn;
+  t_ = t1;
+  stats_.steps += 1;
 }
 
 }  // namespace hcw::flow

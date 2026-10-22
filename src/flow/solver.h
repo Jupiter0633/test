@@ -74,6 +74,10 @@ struct SolverStats {
   int max_poisson_iterations = 0;
   double max_relative_residual = 0.0;
   bool solver_failed = false;  // 허용치 미달 종료 발생
+  // 암시적 운동량 풀이 (step_implicit)
+  long momentum_solves = 0;
+  long momentum_iterations = 0;
+  double max_momentum_residual = 0.0;
 };
 
 class FlowSolver {
@@ -95,6 +99,18 @@ class FlowSolver {
                   const std::function<double(double, double)>& w0);
 
   void step(double dt);
+
+  // 반암시적 1차 시간 진행 (P2): 점성 항 후방 오일러(암시적), 대류·체적력 명시적,
+  // 증분 압력 투영. 물체가 있으면 속도 면을 운동량 분류(body::momentum_classes)로 처리
+  // (고체 면 = 물체 속도, 경계 보간면 = 경계점–바깥 면 직선 보간). 정상 상태에서는 투영 보정이
+  // 0 이 되어 no-slip 이 정확히 성립한다. 정상 상태 계산용이며 시간 정확도는 1차이다.
+  void step_implicit(double dt);
+
+  // step_implicit 이 누적한 압력 (셀 중심, 유체 셀 평균 0)
+  const Array2D& pressure() const { return p_inc_; }
+
+  // 마지막 step_implicit 의 속도 변화: max|Δu| / max|u|
+  double last_change() const { return last_change_; }
 
   // 현재 시각의 속도로부터 압력을 구한다 (셀 중심, 상수 미정 → 평균 0).
   void compute_pressure(Array2D& p);
@@ -126,7 +142,12 @@ class FlowSolver {
   void update_geometry(double t);
 
   void apply_boundary(Array2D& u, Array2D& w, double t) const;
-  void rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw);
+  // 단위 질량당 가속도. convection/viscous/forces(중력·원천) 를 골라 넣을 수 있다 (기본: 전부).
+  void rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw,
+           bool convection = true, bool viscous = true, bool forces = true);
+  // 점성 항 V(u) = A u + c 의 A 를 기존 이산식(rhs 의 점성 부분)을 탐침해 희소 행렬로 만든다.
+  // 미지수 순서: u 면 (i*nz + j), 그 뒤 w 면 (nu + i*(nz+1) + j).
+  void viscous_matrix(double t, CsrMatrix& a);
   // t_rho: 밀도 시각, t_bc: 경계값(벽·물체 속도) 시각
   void project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi);
   // b = −(열린 면 유출 + 물체 경계 유출). body_rate 는 물체의 z 속도(투영) 또는 가속도(압력).
@@ -160,6 +181,14 @@ class FlowSolver {
   std::array<Potential, 5> phi_;
   Array2D su_, sw_;
   SolverStats stats_;
+
+  // step_implicit 상태
+  Array2D p_inc_;
+  double last_change_ = 0.0;
+  CsrMatrix visc_;
+  double visc_time_ = -1.0;
+  bool visc_valid_ = false;
+  std::vector<double> mom_x_;  // 직전 운동량 해 (초기 추정)
 };
 
 }  // namespace hcw::flow
