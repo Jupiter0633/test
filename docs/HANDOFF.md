@@ -63,7 +63,8 @@ out\build\windows-x64-release\hcw_verify.exe all
 | 설계 | 완료 | `docs/design/` 01–06 |
 | P0 (빌드 틀, 입력 검사, 잠금, 실행 기록) | **완료** — Linux·Windows 노트북 모두 시험 18/18 통과 | `validation/records/P0-exit-2026-10-21.md` |
 | P1 (단상·변수밀도 유동, 압력 해법) | **완료 (2026-10-22)** — 첫 실행 1-A(a) `FAILED_SOLVER` → 압력 해법 수정(13a2777) 후 노트북에서 1-A~1-D 모두 `VERIFIED` | `validation/records/P1-1A-a-FAILED_SOLVER-2026-10-22.md`, `P1-exit-2026-10-22.md` |
-| P2 이후 | 미착수 | `04_development_phases.md` |
+| P2 (가상경계법, 이동 물체, 표면 힘) | **완료 (2026-10-22)** — 1-E·1-F·1-H `VERIFIED`, 1-G 는 측정 방법 변경 후 `VERIFIED`. 알려진 한계: 점성 벽 표면 압력 약 1 % | `validation/records/P2-run1-2026-10-22.md`, `P2-exit-2026-10-22.md` |
+| P3 이후 | 미착수 | `04_development_phases.md` |
 
 ### P1 세부 상태
 - 클라우드(Linux) 첫 전체 실행: 2시간 한도로 중단, 판정 없음 (`validation/records/P1-attempt-2026-10-21-linux.md`). 노트북 첫 정식 실행: 10시간 동안 1-A(a) 미완료 → `FAILED_SOLVER` 기록. 공통 원인: 배정밀도 PCG 의 반올림 한계가 고정 허용치(1e−12/1e−13)보다 높음.
@@ -78,10 +79,11 @@ out\build\windows-x64-release\hcw_verify.exe all
 
 ## 7. 다음 할 일 (순서대로)
 
-1. **P2 기준은 승인·고정 완료** (커밋 93cf47d, `03` §1.2). D-05 확정 (격자로 두께 해상, 최소 4셀). 부가질량·Stokes 항력은 Lamb 1932 원문 쪽 확인 (R-21, R-30).
-2. P2 코드 작성: SDF 형상, 날카로운 IBM, 지정 운동, 표면 힘 적분, 물체 고정 좌표계 모드, 검증 1-E ~ 1-H.
-3. P2 정식 검증 실행 → 판정 기록 `validation/records/P2-*.md`. 기준은 절대 바꾸지 말 것.
-4. 자유수면 위 원판의 "절반" 부가질량은 여전히 원전 미확인 — P4 에서 쓰기 전에 확인.
+1. 다음 단계 선택 (사용자 결정): P3 (2상 자유수면, 추천 — P4 입수에 P2·P3 모두 필요) 또는 P5 (구조).
+2. 선택한 단계의 검증 기준안(P3 이면 2-A ~ 2-G)을 쉬운 설명과 함께 제시하고, 승인 후 코드보다 먼저 커밋으로 고정.
+   - P3 진입 전 결정: D-10 (표면장력 포함 여부). 기준에 쓸 문헌 수치는 원문 확인 (R-17 Martin & Moyce, R-19 Prosperetti 등).
+3. 알려진 한계 (P2): 점성(no-slip) 경계 보간 계산의 물체 표면 압력은 약 1 % 치우칠 수 있음. 비점성 컷셀 경로는 검증됨. P4 에서 점성 벽 압력이 필요하면 먼저 개선.
+4. 1-E(b) 처럼 움직이는 물체·저점성 계산은 경계 보간 1차(`Body::interpolation_order = 1`)를 써야 함 (2차 불안정).
 
 ## 8. 주요 문서 위치
 

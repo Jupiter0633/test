@@ -39,3 +39,4 @@ P0 ─ P5 ───────────────┘    │
 |---|---|---|---|
 | P0 | 완료 (2026-10-21) | Linux(gcc 13.3)·Windows 노트북(MSVC 19.51) 모두 자동 시험 18/18 통과 → **종료 조건 충족, P0 완료**. 노트북 기기 등록·빌드 커밋 기록 확인 완료 | `validation/records/P0-exit-2026-10-21.md` |
 | P1 | 완료 (f330e84, 압력 해법 수정 13a2777) | 첫 정식 실행 1-A(a) `FAILED_SOLVER` (압력 해법 정밀도 한계, 기록 보존) → 해법 수정 후 노트북(MSVC 19.51) 정식 실행에서 1-A(a)·1-A(b)·1-B·1-C·1-D 모두 `VERIFIED` → **종료 조건 충족, P1 완료** (개발 기기 판정. 워크스테이션 재실행은 P8) | `validation/records/P1-1A-a-FAILED_SOLVER-2026-10-22.md`, `validation/records/P1-exit-2026-10-22.md` |
+| P2 | 완료 (84465c6, 1-G 측정 6cdab0b) | 1차 정식 실행: 1-E·1-F·1-H `VERIFIED`, 1-G `FAILED_CRITERIA` (표면 압력 재구성) → 1-G 측정을 제어면 운동량 수지로 변경 (사용자 승인, 결과 본 뒤 변경, 기록 보존) → 재판정 `VERIFIED` → **종료 조건 충족, P2 완료**. 알려진 한계: 점성 벽 표면 압력 약 1 % | `validation/records/P2-run1-2026-10-22.md`, `validation/records/P2-exit-2026-10-22.md` |
