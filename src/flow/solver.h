@@ -49,6 +49,7 @@ struct SolverStats {
   long steps = 0;
   long poisson_solves = 0;
   long poisson_iterations = 0;
+  long poisson_refinements = 0;
   int max_poisson_iterations = 0;
   double max_relative_residual = 0.0;
   bool solver_failed = false;  // 허용치 미달 종료 발생
@@ -81,6 +82,11 @@ class FlowSolver {
   double max_divergence() const;
 
  private:
+  // 압력(투영 퍼텐셜) 해. 두 배 정밀도 hi + lo (refined_solve 참조).
+  struct Potential {
+    std::vector<double> hi, lo;
+  };
+
   struct Operator {
     double time = -1.0;
     bool valid = false;
@@ -94,7 +100,7 @@ class FlowSolver {
 
   void apply_boundary(Array2D& u, Array2D& w, double t) const;
   void rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw);
-  void project(Array2D& u, Array2D& w, double t_rho, std::vector<double>& phi);
+  void project(Array2D& u, Array2D& w, double t_rho, Potential& phi);
   void face_flux_rhs(const Array2D& fu, const Array2D& fw, std::vector<double>& b) const;
   void record(const SolveResult& r, double tolerance);
 
@@ -116,7 +122,7 @@ class FlowSolver {
   bool mat_valid_ = false;
   Operator op_;
   // 투영 해 보관 (다음 풀이의 초기 추정): 0–2 RK 단계, 3 출력 압력, 4 초기화
-  std::array<std::vector<double>, 5> phi_;
+  std::array<Potential, 5> phi_;
   Array2D su_, sw_;
   SolverStats stats_;
 };

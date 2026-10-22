@@ -59,7 +59,10 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
   w_ = Array2D(g.nr, g.nz + 1);
   su_ = Array2D(g.nr + 1, g.nz);
   sw_ = Array2D(g.nr, g.nz + 1);
-  for (auto& phi : phi_) phi.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
+  for (auto& phi : phi_) {
+    phi.hi.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
+    phi.lo.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
+  }
 }
 
 int FlowSolver::wrap_r(int i) const {
@@ -200,12 +203,13 @@ void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw,
 void FlowSolver::record(const SolveResult& r, double tolerance) {
   stats_.poisson_solves += 1;
   stats_.poisson_iterations += r.iterations;
+  stats_.poisson_refinements += r.refinements;
   stats_.max_poisson_iterations = std::max(stats_.max_poisson_iterations, r.iterations);
   stats_.max_relative_residual = std::max(stats_.max_relative_residual, r.relative_residual);
   if (!r.converged || r.relative_residual > tolerance) stats_.solver_failed = true;
 }
 
-void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, std::vector<double>& phi) {
+void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, Potential& phi) {
   const Grid& g = p_.grid;
   Operator& op = operator_at(t_rho);
   const MaterialArrays& m = material_at(t_rho);
@@ -213,21 +217,24 @@ void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, std::vector<doubl
   std::vector<double> b;
   face_flux_rhs(u, w, b);
   remove_mean(b);
-  record(pcg(op.matrix, op.preconditioner, b, phi, opt_.projection_tolerance,
-             opt_.max_iterations),
+  record(refined_solve(op.matrix, op.preconditioner, b, phi.hi, phi.lo,
+                       opt_.projection_tolerance, opt_.max_iterations),
          opt_.projection_tolerance);
 
-  auto at = [&](int i, int j) {
-    return phi[static_cast<std::size_t>(wrap_r(i)) * g.nz + wrap_z(j)];
+  // 두 셀 사이 퍼텐셜 차. hi 와 lo 를 따로 빼야 두 배 정밀도가 유지된다.
+  auto diff = [&](int i1, int j1, int i0, int j0) {
+    const std::size_t a = static_cast<std::size_t>(wrap_r(i1)) * g.nz + wrap_z(j1);
+    const std::size_t c = static_cast<std::size_t>(wrap_r(i0)) * g.nz + wrap_z(j0);
+    return (phi.hi[a] - phi.hi[c]) + (phi.lo[a] - phi.lo[c]);
   };
   for (int i = iu_lo_; i < iu_hi_; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      u(i, j) -= (at(i, j) - at(i - 1, j)) / (m.rho_u(i, j) * g.dr);
+      u(i, j) -= diff(i, j, i - 1, j) / (m.rho_u(i, j) * g.dr);
     }
   }
   for (int i = 0; i < g.nr; ++i) {
     for (int j = jw_lo_; j < jw_hi_; ++j) {
-      w(i, j) -= (at(i, j) - at(i, j - 1)) / (m.rho_w(i, j) * g.dz);
+      w(i, j) -= diff(i, j, i, j - 1) / (m.rho_w(i, j) * g.dz);
     }
   }
   if (periodic_r_) {
@@ -404,15 +411,17 @@ void FlowSolver::compute_pressure(Array2D& p) {
   face_flux_rhs(fu, fw, b);
   remove_mean(b);
   Operator& op = operator_at(t_);
-  std::vector<double>& x = phi_[3];
-  record(pcg(op.matrix, op.preconditioner, b, x, opt_.pressure_tolerance, opt_.max_iterations),
+  Potential& x = phi_[3];
+  record(refined_solve(op.matrix, op.preconditioner, b, x.hi, x.lo, opt_.pressure_tolerance,
+                       opt_.max_iterations),
          opt_.pressure_tolerance);
 
   p = Array2D(g.nr, g.nz);
   double sum = 0.0, vol = 0.0;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      p(i, j) = x[static_cast<std::size_t>(i) * g.nz + j];
+      const std::size_t k = static_cast<std::size_t>(i) * g.nz + j;
+      p(i, j) = x.hi[k] + x.lo[k];
       sum += p(i, j) * g.cell_volume(i);
       vol += g.cell_volume(i);
     }

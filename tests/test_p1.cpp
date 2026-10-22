@@ -1,4 +1,4 @@
-// P1 단위 시험: Jet 도함수, 켤레기울기 해법, 투영 후 발산, 경계 처리.
+// P1 단위 시험: Jet 도함수, 켤레기울기 해법, 보정 해법, 투영 후 발산, 경계 처리.
 
 #include <cmath>
 #include <iostream>
@@ -73,6 +73,55 @@ void test_pcg() {
   expect(err < 1e-8, "pcg solution accuracy");
   // 삼중대각에서 IC(0) 는 정확한 Cholesky → 한 번에 수렴
   expect(res.iterations <= 2, "IC(0) is exact for tridiagonal matrices");
+}
+
+// 회귀 시험: 고운 격자에서 배정밀도 pcg 는 반올림 한계(≈ ε·|A||x|/|b|)에 막혀
+// 1e-13 에 닿지 못하고 최대 반복까지 돈다 (P1 1-A(a) N≥64 의 출력 압력, 2026-10-22).
+// 보정 해법은 허용치에 닿아야 하고, 닿을 수 없는 허용치에서는 빨리 실패해야 한다.
+void test_refined_solve() {
+  // 2차원 Dirichlet 라플라시안 128×128, 매끈한 해 → |A||x| / |b| ≈ N² 수준
+  const int m = 128, n = m * m;
+  CsrMatrix a;
+  a.n = n;
+  a.row_start.push_back(0);
+  for (int i = 0; i < m; ++i) {
+    for (int j = 0; j < m; ++j) {
+      const int k = i * m + j;
+      if (i > 0) { a.col.push_back(k - m); a.val.push_back(-1.0); }
+      if (j > 0) { a.col.push_back(k - 1); a.val.push_back(-1.0); }
+      a.col.push_back(k);
+      a.val.push_back(4.0);
+      if (j < m - 1) { a.col.push_back(k + 1); a.val.push_back(-1.0); }
+      if (i < m - 1) { a.col.push_back(k + m); a.val.push_back(-1.0); }
+      a.row_start.push_back(static_cast<int>(a.col.size()));
+    }
+  }
+  const double pi = 3.14159265358979323846;
+  std::vector<double> x_true(n), b;
+  for (int i = 0; i < m; ++i) {
+    for (int j = 0; j < m; ++j) {
+      x_true[i * m + j] = std::sin(pi * (i + 1) / (m + 1)) * std::sin(pi * (j + 1) / (m + 1)) + 1.0;
+    }
+  }
+  a.multiply(x_true, b);
+  IncompleteCholesky ic;
+  ic.factor(a);
+
+  std::vector<double> hi, lo;
+  const SolveResult res = refined_solve(a, ic, b, hi, lo, 1e-13, 20000);
+  expect(res.converged && res.relative_residual <= 1e-13, "refined solve reaches 1e-13 on 128x128");
+  expect(res.iterations < 2000, "refined solve needs few iterations on 128x128");
+
+  // 닿을 수 없는 허용치: 최대 반복까지 가지 않고 정체로 끝나야 한다
+  hi.clear();
+  lo.clear();
+  const SolveResult stuck = refined_solve(a, ic, b, hi, lo, 1e-40, 1000000);
+  expect(!stuck.converged && stuck.stagnated, "unreachable tolerance ends as stagnation");
+  expect(stuck.iterations < 20000, "stagnation is detected early");
+
+  // 따뜻한 시작: 이미 푼 해에서 다시 풀면 바로 끝난다
+  const SolveResult again = refined_solve(a, ic, b, hi, lo, 1e-13, 20000);
+  expect(again.converged && again.iterations == 0, "warm start from a converged solution");
 }
 
 // 임의의 매끈한 속도장을 투영한 뒤 이산 발산이 반올림 수준인지
@@ -177,6 +226,7 @@ void test_invalid_setups() {
 int main() {
   test_jet();
   test_pcg();
+  test_refined_solve();
   test_projection(Geometry::Planar, BoundaryKind::Wall, BoundaryKind::Wall, "planar walls");
   test_projection(Geometry::Planar, BoundaryKind::Periodic, BoundaryKind::Periodic,
                   "planar periodic");

@@ -47,8 +47,9 @@ std::string render(const TestReport& rep, const std::string& header) {
       const auto it = run.metrics.find(k);
       if (it != run.metrics.end()) o << "  " << k << " = " << it->second << "\n";
     }
-    o << "  poisson: solves " << run.stats.poisson_solves << ", max iterations "
-      << run.stats.max_poisson_iterations << ", max relative residual "
+    o << "  poisson: solves " << run.stats.poisson_solves << ", total iterations "
+      << run.stats.poisson_iterations << ", refinements " << run.stats.poisson_refinements
+      << ", max iterations " << run.stats.max_poisson_iterations << ", max relative residual "
       << run.stats.max_relative_residual << "\n"
       << "  steps " << run.stats.steps << ", wall time " << run.seconds << " s\n";
   }

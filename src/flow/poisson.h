@@ -33,12 +33,24 @@ class IncompleteCholesky {
 
 struct SolveResult {
   bool converged = false;
-  int iterations = 0;
+  int iterations = 0;          // 켤레기울기 반복 횟수 (보정 해법은 내부 반복의 합)
   double relative_residual = 0.0;
+  int refinements = 0;         // 보정 해법의 바깥 반복 횟수
+  bool stagnated = false;      // 잔차가 더 줄지 않아 조기 종료
 };
 
 // x 는 초기 추정값으로 쓰이고 해로 덮어쓴다. 허용치는 ||r|| / ||b||.
 SolveResult pcg(const CsrMatrix& a, const IncompleteCholesky& m, const std::vector<double>& b,
                 std::vector<double>& x, double tolerance, int max_iterations);
+
+// 반복 보정 해법. 해를 두 배 정밀도(x = hi + lo)로 들고, 잔차 b − A(hi + lo) 를
+// 오차 없는 변환(TwoSum, FMA)으로 계산한다. 보정량은 pcg 로 느슨하게(내부 허용치) 푼다.
+// 배정밀도 하나로는 격자가 고울수록 잔차가 반올림 한계(≈ ε·|A||x|)에서 멈춰
+// 1e-12 같은 허용치에 닿지 못하기 때문이다. 판정 잔차는 위 정밀 잔차의 ||·|| / ||b||.
+// 잔차가 더 줄지 않으면 max_iterations 까지 기다리지 않고 실패(stagnated)로 끝낸다.
+// hi, lo 는 초기 추정값으로 쓰이고 해로 덮어쓴다 (lo 가 비어 있으면 0).
+SolveResult refined_solve(const CsrMatrix& a, const IncompleteCholesky& m,
+                          const std::vector<double>& b, std::vector<double>& hi,
+                          std::vector<double>& lo, double tolerance, int max_iterations);
 
 }  // namespace hcw::flow

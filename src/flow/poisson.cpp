@@ -143,4 +143,101 @@ SolveResult pcg(const CsrMatrix& a, const IncompleteCholesky& m, const std::vect
   return result;
 }
 
+namespace {
+
+// s + e = a + b 를 정확히 (Knuth TwoSum)
+inline void two_sum(double a, double b, double& s, double& e) {
+  s = a + b;
+  const double bb = s - a;
+  e = (a - (s - bb)) + (b - bb);
+}
+
+// r = b − A(hi + lo). 행마다 배정밀도 두 배 수준으로 누적한다 (Ogita–Rump–Oishi Dot2 방식).
+double accurate_residual(const CsrMatrix& a, const std::vector<double>& b,
+                         const std::vector<double>& hi, const std::vector<double>& lo,
+                         std::vector<double>& r) {
+  r.resize(static_cast<std::size_t>(a.n));
+  double sum_sq = 0.0;
+  for (int i = 0; i < a.n; ++i) {
+    double s = b[i], c = 0.0;
+    for (int k = a.row_start[i]; k < a.row_start[i + 1]; ++k) {
+      const double av = a.val[k];
+      const double xh = hi[a.col[k]];
+      const double p = -av * xh;
+      const double pe = std::fma(-av, xh, -p);  // 곱의 반올림 오차
+      double e;
+      two_sum(s, p, s, e);
+      c += e + pe - av * lo[a.col[k]];
+    }
+    r[i] = s + c;
+    sum_sq += r[i] * r[i];
+  }
+  return std::sqrt(sum_sq);
+}
+
+}  // namespace
+
+SolveResult refined_solve(const CsrMatrix& a, const IncompleteCholesky& m,
+                          const std::vector<double>& b, std::vector<double>& hi,
+                          std::vector<double>& lo, double tolerance, int max_iterations) {
+  // 내부 pcg 가 한 번에 줄이는 비율. 배정밀도 반올림 한계보다 충분히 커야 한다.
+  constexpr double kInnerTolerance = 1e-6;
+  // 바깥 반복에서 잔차가 이 비율보다 덜 줄면 정체로 본다.
+  constexpr double kMinReduction = 0.5;
+  constexpr int kMaxStalls = 3;
+
+  SolveResult result;
+  const std::size_t n = static_cast<std::size_t>(a.n);
+  hi.resize(n, 0.0);
+  lo.resize(n, 0.0);
+  const double b_norm = std::sqrt(dot(b, b));
+  if (b_norm == 0.0) {
+    hi.assign(n, 0.0);
+    lo.assign(n, 0.0);
+    result.converged = true;
+    return result;
+  }
+
+  std::vector<double> r, d;
+  double r_norm = accurate_residual(a, b, hi, lo, r);
+  // 초기 추정이 0 보다 나쁘면 버린다 (pcg 와 같은 이유).
+  if (r_norm > b_norm) {
+    hi.assign(n, 0.0);
+    lo.assign(n, 0.0);
+    r = b;
+    r_norm = b_norm;
+  }
+
+  int stalls = 0;
+  while (r_norm > tolerance * b_norm) {
+    const int budget = max_iterations - result.iterations;
+    if (budget <= 0) break;
+    d.assign(n, 0.0);
+    const SolveResult inner = pcg(a, m, r, d, kInnerTolerance, budget);
+    result.iterations += inner.iterations;
+    result.refinements += 1;
+    // (hi, lo) += d
+    for (std::size_t i = 0; i < n; ++i) {
+      double s, e;
+      two_sum(hi[i], d[i], s, e);
+      e += lo[i];
+      hi[i] = s + e;
+      lo[i] = e - (hi[i] - s);
+    }
+    const double previous = r_norm;
+    r_norm = accurate_residual(a, b, hi, lo, r);
+    if (r_norm > kMinReduction * previous) {
+      if (++stalls >= kMaxStalls) {
+        result.stagnated = true;
+        break;
+      }
+    } else {
+      stalls = 0;
+    }
+  }
+  result.relative_residual = r_norm / b_norm;
+  result.converged = r_norm <= tolerance * b_norm;
+  return result;
+}
+
 }  // namespace hcw::flow
