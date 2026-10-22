@@ -70,7 +70,9 @@ add_library(hcw_flow STATIC
   src/body/cut_cell.cpp
   src/body/force.cpp
   src/interface/plic.cpp
-  src/interface/vof.cpp)
+  src/interface/vof.cpp
+  src/interface/vof_material.cpp
+  src/interface/two_phase.cpp)
 target_include_directories(hcw_flow PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # 검증 시험 (docs/design/03_verification_plan.md §1.1 P1, §1.2 P2)

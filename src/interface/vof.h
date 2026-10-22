@@ -24,7 +24,8 @@ class Vof {
   // 면 체적 플럭스 q (단위 시간, 2π 제외, 축대칭은 r 가중 면적 기준)로 Δt 만큼 수송.
   // qu: r 면 (nr+1, nz), qw: z 면 (nr, nz+1). 영역 가장자리 면의 플럭스는 0 이어야 한다.
   // 면마다 |q|Δt / 면적 이 그 방향 셀 폭의 절반을 넘으면 std::invalid_argument.
-  void advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt);
+  // r_first: 분할 순서 (음수면 호출마다 번갈아).
+  void advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt, int r_first = -1);
 
   double water_volume() const;     // Σ f · 셀 체적
   double bound_violation() const;  // max(−f, f − 1, 0) 전체 최댓값

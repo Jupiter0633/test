@@ -147,6 +147,13 @@ void FlowSolver::apply_boundary(Array2D& u, Array2D& w, double t) const {
   }
 }
 
+void FlowSolver::material_changed() {
+  mat_valid_ = false;
+  op_.valid = false;
+  op_mom_.valid = false;
+  visc_valid_ = false;
+}
+
 const MaterialArrays& FlowSolver::material_at(double t) {
   if (!mat_valid_ || (p_.material->time_dependent() && t != mat_time_)) {
     p_.material->evaluate(p_.grid, t, mat_);

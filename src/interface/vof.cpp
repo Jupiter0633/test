@@ -110,12 +110,13 @@ void Vof::sweep_z(const flow::Array2D& qw, double dt, const std::vector<char>& c
   }
 }
 
-void Vof::advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt) {
+void Vof::advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt, int r_first) {
   std::vector<char> c(static_cast<std::size_t>(g_.nr) * g_.nz);
   for (int i = 0; i < g_.nr; ++i) {
     for (int j = 0; j < g_.nz; ++j) c[static_cast<std::size_t>(i) * g_.nz + j] = f_(i, j) > 0.5;
   }
-  if (steps_ % 2 == 0) {
+  const bool rf = r_first < 0 ? steps_ % 2 == 0 : r_first != 0;
+  if (rf) {
     sweep_r(qu, dt, c);
     sweep_z(qw, dt, c);
   } else {

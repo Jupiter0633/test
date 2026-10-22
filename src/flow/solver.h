@@ -124,6 +124,9 @@ class FlowSolver {
   // 셀 중심 이산 발산의 최댓값 (검사용). 물체가 있으면 유체 셀만, 경계 플럭스 포함.
   double max_divergence() const;
 
+  // 물성(Material)이 같은 시각에서도 바뀌었을 때 (예: VOF 체적분율 갱신) 캐시한 물성·연산자를 버린다
+  void material_changed();
+
   // 현재 시각의 컷셀 기하 (물체가 없으면 모든 면이 열림)
   const body::CutGeometry& geometry() const { return geom_; }
 
