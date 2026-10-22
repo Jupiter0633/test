@@ -8,11 +8,29 @@
 #include <functional>
 #include <memory>
 
+#include "body/cut_cell.h"
+#include "body/shape.h"
 #include "flow/grid.h"
 #include "flow/material.h"
 #include "flow/poisson.h"
 
 namespace hcw::flow {
+
+// 지정 운동 물체 (P2). 축을 따라 z 방향 병진만 한다. 함수가 비어 있으면 0 (정지, 중심 z = 0).
+struct BodyMotion {
+  std::function<double(double t)> z;  // 중심 높이
+  std::function<double(double t)> w;  // 속도
+  std::function<double(double t)> a;  // 가속도
+};
+
+struct Body {
+  std::shared_ptr<const body::Shape> shape;
+  BodyMotion motion;
+  bool moving() const { return static_cast<bool>(motion.z) || static_cast<bool>(motion.w); }
+  double z(double t) const { return motion.z ? motion.z(t) : 0.0; }
+  double w(double t) const { return motion.w ? motion.w(t) : 0.0; }
+  double a(double t) const { return motion.a ? motion.a(t) : 0.0; }
+};
 
 enum class BoundaryKind { Wall, Periodic, Axis };
 
@@ -37,6 +55,9 @@ struct Problem {
   std::shared_ptr<const Material> material;
   std::array<double, 2> gravity{0.0, 0.0};
   SourceFn source;
+  // 물체 (없으면 nullptr). 현재 압력 방정식(투영, 압력 출력)만 물체를 반영한다.
+  // 물체 근처 운동량(점성 no-slip, 이동 경계의 새 셀)은 아직 구현 전이라 step() 은 거부한다.
+  std::shared_ptr<const Body> body;
 };
 
 struct SolverOptions {
@@ -78,8 +99,11 @@ class FlowSolver {
   // 현재 시각의 속도로부터 압력을 구한다 (셀 중심, 상수 미정 → 평균 0).
   void compute_pressure(Array2D& p);
 
-  // 셀 중심 이산 발산의 최댓값 (검사용)
+  // 셀 중심 이산 발산의 최댓값 (검사용). 물체가 있으면 유체 셀만, 경계 플럭스 포함.
   double max_divergence() const;
+
+  // 현재 시각의 컷셀 기하 (물체가 없으면 모든 면이 열림)
+  const body::CutGeometry& geometry() const { return geom_; }
 
  private:
   // 압력(투영 퍼텐셜) 해. 두 배 정밀도 hi + lo (refined_solve 참조).
@@ -89,19 +113,26 @@ class FlowSolver {
 
   struct Operator {
     double time = -1.0;
+    double geometry_time = -1.0;
     bool valid = false;
     CsrMatrix matrix;
     IncompleteCholesky preconditioner;
   };
 
   const MaterialArrays& material_at(double t);
-  Operator& operator_at(double t);
+  // 밀도는 시각 t_rho, 물체 위치는 시각 t_geom 의 압력 연산자
+  Operator& operator_at(double t_rho, double t_geom);
   void build_operator(const MaterialArrays& m, Operator& op) const;
+  void update_geometry(double t);
 
   void apply_boundary(Array2D& u, Array2D& w, double t) const;
   void rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw);
-  void project(Array2D& u, Array2D& w, double t_rho, Potential& phi);
-  void face_flux_rhs(const Array2D& fu, const Array2D& fw, std::vector<double>& b) const;
+  // t_rho: 밀도 시각, t_bc: 경계값(벽·물체 속도) 시각
+  void project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi);
+  // b = −(열린 면 유출 + 물체 경계 유출). body_rate 는 물체의 z 속도(투영) 또는 가속도(압력).
+  void face_flux_rhs(const Array2D& fu, const Array2D& fw, double body_rate,
+                     std::vector<double>& b) const;
+  void remove_active_mean(std::vector<double>& b) const;
   void record(const SolveResult& r, double tolerance);
 
   // 경계·주기를 고려한 값 접근
@@ -116,6 +147,10 @@ class FlowSolver {
   Array2D u_, w_;
   int iu_lo_ = 0, iu_hi_ = 0, jw_lo_ = 0, jw_hi_ = 0;
   bool periodic_r_ = false, periodic_z_ = false;
+
+  body::CutGeometry geom_;
+  double geom_time_ = -1.0;
+  bool geom_valid_ = false;
 
   MaterialArrays mat_;
   double mat_time_ = -1.0;

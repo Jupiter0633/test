@@ -29,6 +29,10 @@ struct Criterion {
 struct TestReport {
   std::string id;
   std::string title;
+  // 기준 위치: docs/design/03_verification_plan.md 의 절과 기준 고정 커밋
+  std::string phase = "P1";
+  std::string criteria_section = "1.1";
+  std::string criteria_commit = "35a77ac";
   std::vector<GridRun> runs;
   std::vector<Criterion> criteria;
   std::string verdict;  // VERIFIED / FAILED_<사유> / QUICK_CHECK_ONLY

@@ -6,8 +6,12 @@ add_executable(hcw_unit_tests_p1 test_p1.cpp)
 target_link_libraries(hcw_unit_tests_p1 PRIVATE hcw_flow)
 add_test(NAME unit_p1 COMMAND hcw_unit_tests_p1)
 
-# P1 검증 시험의 축소판 (동작 확인용, 판정 아님). 전체 판정은 hcw_verify all 로 따로 실행.
-foreach(t 1A 1B 1C 1D)
+add_executable(hcw_unit_tests_p2 test_p2.cpp)
+target_link_libraries(hcw_unit_tests_p2 PRIVATE hcw_verify_cases)
+add_test(NAME unit_p2 COMMAND hcw_unit_tests_p2)
+
+# 검증 시험의 축소판 (동작 확인용, 판정 아님). 전체 판정은 hcw_verify P1 / P2 로 따로 실행.
+foreach(t 1A 1B 1C 1D 1E 1F 1H)
   add_test(NAME verify_quick_${t} COMMAND hcw_verify ${t} --quick)
   set_tests_properties(verify_quick_${t} PROPERTIES LABELS quick)
 endforeach()

@@ -1,6 +1,6 @@
-// hcw_verify: P1 검증 시험 실행기.
-// 기준: docs/design/03_verification_plan.md §1.1 (기준 고정 커밋 35a77ac)
-// 결과는 화면과 results/verification/P1/<시험>/<UTC 시각>/report.txt 에 남긴다.
+// hcw_verify: 검증 시험 실행기 (P1, P2).
+// 기준: docs/design/03_verification_plan.md §1.1 (P1, 고정 커밋 35a77ac), §1.2 (P2, 고정 커밋 93cf47d)
+// 결과는 화면과 results/verification/<단계>/<시험>/<UTC 시각>/report.txt 에 남긴다.
 
 #include <algorithm>
 #include <filesystem>
@@ -15,6 +15,7 @@
 #include "io/case_policy.h"
 #include "io/run_metadata.h"
 #include "verify/p1_cases.h"
+#include "verify/p2_cases.h"
 
 namespace fs = std::filesystem;
 using namespace hcw;
@@ -22,15 +23,13 @@ using namespace hcw::verify;
 
 namespace {
 
-const char* kCriteriaCommit = "35a77ac";
-
 std::string render(const TestReport& rep, const std::string& header) {
   std::ostringstream o;
   o.precision(6);
   o << header;
   o << "test     : " << rep.id << " - " << rep.title << "\n"
-    << "criteria : docs/design/03_verification_plan.md section 1.1 (locked in commit "
-    << kCriteriaCommit << ")\n\n";
+    << "criteria : docs/design/03_verification_plan.md section " << rep.criteria_section
+    << " (locked in commit " << rep.criteria_commit << ")\n\n";
 
   // 지표 이름 모음
   std::vector<std::string> keys;
@@ -54,8 +53,8 @@ std::string render(const TestReport& rep, const std::string& header) {
       << "  steps " << run.stats.steps << ", wall time " << run.seconds << " s\n";
   }
   // 연속 격자 사이 관측 차수 (참고용)
-  // 1-D 는 격자 세분화 시험이 아니므로 차수를 출력하지 않는다.
-  if (rep.runs.size() >= 2 && rep.id != "1-D") {
+  // 1-D 는 격자 세분화 시험이 아니므로 차수를 출력하지 않는다. P2 는 시험 안에서 따로 보고한다.
+  if (rep.runs.size() >= 2 && rep.id != "1-D" && rep.phase == "P1") {
     o << "\nobserved orders between successive grids:\n";
     for (const auto& k : keys) {
       if (k == "steps" || k == "final_step_change") continue;
@@ -81,7 +80,7 @@ std::string render(const TestReport& rep, const std::string& header) {
 std::string header_text(bool quick) {
   const BuildInfo b = current_build_info();
   std::ostringstream o;
-  o << "hcw_verify (P1)\n"
+  o << "hcw_verify\n"
     << "created  : " << utc_now_iso() << "\n"
     << "build    : " << b.git_commit << " (" << b.git_tree_state << "), " << b.compiler << " ["
     << b.build_config << "], " << b.platform << "\n"
@@ -92,7 +91,7 @@ std::string header_text(bool quick) {
   return o.str();
 }
 
-void save(const std::string& id, const std::string& text, bool quick) {
+void save(const std::string& phase, const std::string& id, const std::string& text, bool quick) {
   const auto root = find_project_root(fs::current_path());
   if (!root) {
     std::cout << "(not saved: run from inside the repository to save a report)\n";
@@ -102,7 +101,7 @@ void save(const std::string& id, const std::string& text, bool quick) {
   for (char& c : folder) {
     if (c == '(' || c == ')') c = '_';
   }
-  const fs::path dir = *root / "results" / "verification" / "P1" / folder /
+  const fs::path dir = *root / "results" / "verification" / phase / folder /
                        (utc_now_compact() + (quick ? "_quick" : ""));
   std::error_code ec;
   fs::create_directories(dir, ec);
@@ -112,7 +111,9 @@ void save(const std::string& id, const std::string& text, bool quick) {
 }
 
 void usage() {
-  std::cout << "usage: hcw_verify <1A | 1A-a | 1A-b | 1B | 1C | 1D | all> [--quick]\n"
+  std::cout << "usage: hcw_verify <test | P1 | P2> [--quick]\n"
+               "  P1 tests: 1A, 1A-a, 1A-b, 1B, 1C, 1D   ('all' = P1, kept for compatibility)\n"
+               "  P2 tests: 1E, 1F, 1H   (1G pending)\n"
                "  --quick   reduced grids for a fast functional check (no verdict)\n"
                "exit code: 0 if every requested test is VERIFIED (or quick mode), 4 otherwise\n";
 }
@@ -136,9 +137,11 @@ int main(int argc, char** argv) {
   }
   const std::string what = args[0];
   std::vector<std::string> tests;
-  if (what == "all") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
+  if (what == "all" || what == "P1") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
+  else if (what == "P2") tests = {"1E", "1F", "1H"};
   else if (what == "1A") tests = {"1A-a", "1A-b"};
-  else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D")
+  else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D" ||
+           what == "1E" || what == "1F" || what == "1H")
     tests = {what};
   else {
     usage();
@@ -155,9 +158,12 @@ int main(int argc, char** argv) {
     if (t == "1B") rep = run_1b(quick);
     if (t == "1C") rep = run_1c(quick);
     if (t == "1D") rep = run_1d(quick);
+    if (t == "1E") rep = run_1e(quick);
+    if (t == "1F") rep = run_1f(quick);
+    if (t == "1H") rep = run_1h(quick);
     const std::string text = render(rep, header);
     std::cout << text;
-    if (!quick) save(rep.id, text, quick);
+    if (!quick) save(rep.phase, rep.id, text, quick);
     std::cout << "\n";
     if (!quick && rep.verdict != "VERIFIED") all_ok = false;
     if (quick && rep.verdict != "QUICK_CHECK_ONLY") all_ok = false;

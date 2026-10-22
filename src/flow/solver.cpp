@@ -63,6 +63,28 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
     phi.hi.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
     phi.lo.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
   }
+
+  geom_ = body::open_geometry(g);
+  geom_valid_ = !p_.body;
+  if (p_.body) {
+    if (!p_.body->shape) throw std::invalid_argument("body has no shape");
+    if (!axisym || g.r0 != 0.0) {
+      throw std::invalid_argument("bodies are supported on axisymmetric grids from the axis only");
+    }
+    if (periodic_z_) throw std::invalid_argument("bodies are not supported with periodic z");
+  }
+}
+
+void FlowSolver::update_geometry(double t) {
+  if (!p_.body) return;
+  if (geom_valid_ && (!p_.body->moving() || geom_time_ == t)) return;
+  geom_ = body::cut_geometry(p_.grid, *p_.body->shape, p_.body->z(t));
+  geom_time_ = t;
+  geom_valid_ = true;
+  // 압력 정칙화 셀(마지막 셀)은 유체여야 한다 (build_operator 참조)
+  if (!geom_.active.back()) {
+    throw std::invalid_argument("the last cell (pressure reference) must be in the fluid");
+  }
 }
 
 int FlowSolver::wrap_r(int i) const {
@@ -130,11 +152,15 @@ const MaterialArrays& FlowSolver::material_at(double t) {
   return mat_;
 }
 
-FlowSolver::Operator& FlowSolver::operator_at(double t) {
-  const bool fresh = op_.valid && (!p_.material->time_dependent() || op_.time == t);
+FlowSolver::Operator& FlowSolver::operator_at(double t_rho, double t_geom) {
+  update_geometry(t_geom);
+  const bool moving = p_.body && p_.body->moving();
+  const bool fresh = op_.valid && (!p_.material->time_dependent() || op_.time == t_rho) &&
+                     (!moving || op_.geometry_time == t_geom);
   if (!fresh) {
-    build_operator(material_at(t), op_);
-    op_.time = t;
+    build_operator(material_at(t_rho), op_);
+    op_.time = t_rho;
+    op_.geometry_time = t_geom;
     op_.valid = true;
   }
   return op_;
@@ -152,17 +178,25 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op) const {
     rows[b][a] -= coef;
   };
 
+  // 컷셀: 면 계수에 열린 비율을 곱한다. 막힌 면(0)은 연결하지 않는다.
+  // 물체가 없으면 비율이 정확히 1 이라 P1 과 같은 값이 된다.
   for (int i = iu_lo_; i < iu_hi_; ++i) {
     const double area = g.metric(g.rf(i)) * g.dz;
     for (int j = 0; j < g.nz; ++j) {
-      couple(cell(i - 1, j), cell(i, j), area / (m.rho_u(i, j) * g.dr));
+      const double open = geom_.open_u(i, j);
+      if (open > 0.0) couple(cell(i - 1, j), cell(i, j), open * (area / (m.rho_u(i, j) * g.dr)));
     }
   }
   for (int i = 0; i < g.nr; ++i) {
     const double area = g.metric(g.rc(i)) * g.dr;
     for (int j = jw_lo_; j < jw_hi_; ++j) {
-      couple(cell(i, j - 1), cell(i, j), area / (m.rho_w(i, j) * g.dz));
+      const double open = geom_.open_w(i, j);
+      if (open > 0.0) couple(cell(i, j - 1), cell(i, j), open * (area / (m.rho_w(i, j) * g.dz)));
     }
+  }
+  // 고체로 가득 찬 셀은 다른 셀과 연결되지 않는 항등 행 (해 0)
+  for (int c = 0; c < n; ++c) {
+    if (!geom_.active[static_cast<std::size_t>(c)]) rows[c][c] = 1.0;
   }
   // 압력은 상수만큼 미정 → 마지막 셀의 대각을 두 배로 해 정칙화한다.
   // 우변의 합이 0 이면 그 셀의 해가 0 이 되며 나머지 해는 바뀌지 않는다.
@@ -185,18 +219,46 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op) const {
   op.preconditioner.factor(a);
 }
 
-void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw,
+void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw, double body_rate,
                                std::vector<double>& b) const {
   const Grid& g = p_.grid;
+  const Array2D& ou = geom_.open_u;
+  const Array2D& ow = geom_.open_w;
   b.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
   for (int i = 0; i < g.nr; ++i) {
     const double aw = g.metric(g.rf(i)) * g.dz;
     const double ae = g.metric(g.rf(i + 1)) * g.dz;
     const double az = g.metric(g.rc(i)) * g.dr;
     for (int j = 0; j < g.nz; ++j) {
-      const double out = ae * fu(i + 1, j) - aw * fu(i, j) + az * (fw(i, j + 1) - fw(i, j));
-      b[static_cast<std::size_t>(i) * g.nz + j] = -out;
+      const std::size_t c = static_cast<std::size_t>(i) * g.nz + j;
+      if (!geom_.active[c]) continue;
+      const double out = ae * ou(i + 1, j) * fu(i + 1, j) - aw * ou(i, j) * fu(i, j) +
+                         az * (ow(i, j + 1) * fw(i, j + 1) - ow(i, j) * fw(i, j));
+      b[c] = -out;
     }
+  }
+  // 물체 경계 유출: 강체 z 병진 W 에 대해 W · ∫ n_z dA (body/cut_cell.h)
+  for (const auto& piece : geom_.pieces) {
+    b[static_cast<std::size_t>(piece.i) * g.nz + piece.j] -= body_rate * piece.nz_area;
+  }
+}
+
+void FlowSolver::remove_active_mean(std::vector<double>& b) const {
+  if (!p_.body) {
+    remove_mean(b);
+    return;
+  }
+  double s = 0.0;
+  std::size_t count = 0;
+  for (std::size_t c = 0; c < b.size(); ++c) {
+    if (geom_.active[c]) {
+      s += b[c];
+      ++count;
+    }
+  }
+  const double mean = s / static_cast<double>(count);
+  for (std::size_t c = 0; c < b.size(); ++c) {
+    if (geom_.active[c]) b[c] -= mean;
   }
 }
 
@@ -209,14 +271,15 @@ void FlowSolver::record(const SolveResult& r, double tolerance) {
   if (!r.converged || r.relative_residual > tolerance) stats_.solver_failed = true;
 }
 
-void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, Potential& phi) {
+void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi) {
   const Grid& g = p_.grid;
-  Operator& op = operator_at(t_rho);
+  Operator& op = operator_at(t_rho, t_bc);
   const MaterialArrays& m = material_at(t_rho);
+  const double body_w = p_.body ? p_.body->w(t_bc) : 0.0;
 
   std::vector<double> b;
-  face_flux_rhs(u, w, b);
-  remove_mean(b);
+  face_flux_rhs(u, w, body_w, b);
+  remove_active_mean(b);
   record(refined_solve(op.matrix, op.preconditioner, b, phi.hi, phi.lo,
                        opt_.projection_tolerance, opt_.max_iterations),
          opt_.projection_tolerance);
@@ -242,6 +305,19 @@ void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, Potential& phi) {
   }
   if (periodic_z_) {
     for (int i = 0; i < g.nr; ++i) w(i, g.nz) = w(i, 0);
+  }
+  // 물체 안에 완전히 묻힌 면은 물체 속도 (r 성분 0, z 성분 W)
+  if (p_.body) {
+    for (int i = iu_lo_; i < iu_hi_; ++i) {
+      for (int j = 0; j < g.nz; ++j) {
+        if (geom_.open_u(i, j) == 0.0) u(i, j) = 0.0;
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = jw_lo_; j < jw_hi_; ++j) {
+        if (geom_.open_w(i, j) == 0.0) w(i, j) = body_w;
+      }
+    }
   }
 }
 
@@ -339,10 +415,14 @@ void FlowSolver::initialize(double t0, const std::function<double(double, double
     for (int j = 0; j <= g.nz; ++j) w_(i, j) = w0(g.rc(i), g.zf(j));
   }
   apply_boundary(u_, w_, t0);
-  project(u_, w_, t0, phi_[4]);
+  project(u_, w_, t0, t0, phi_[4]);
 }
 
 void FlowSolver::step(double dt) {
+  if (p_.body) {
+    throw std::logic_error(
+        "time stepping with a body is not implemented yet (P2: near-body momentum pending)");
+  }
   const Grid& g = p_.grid;
   const double t = t_;
   const Array2D u0 = u_, w0 = w_;
@@ -364,17 +444,17 @@ void FlowSolver::step(double dt) {
   rhs(u_, w_, t, fu, fw);
   combine(u_, w_, 0.0, 1.0);
   apply_boundary(u_, w_, t + dt);
-  project(u_, w_, t, phi_[0]);
+  project(u_, w_, t, t + dt, phi_[0]);
   // 2단: → t+dt/2 (밀도 t+dt)
   rhs(u_, w_, t + dt, fu, fw);
   combine(u_, w_, 0.75, 0.25);
   apply_boundary(u_, w_, t + 0.5 * dt);
-  project(u_, w_, t + dt, phi_[1]);
+  project(u_, w_, t + dt, t + 0.5 * dt, phi_[1]);
   // 3단: → t+dt (밀도 t+dt/2)
   rhs(u_, w_, t + 0.5 * dt, fu, fw);
   combine(u_, w_, 1.0 / 3.0, 2.0 / 3.0);
   apply_boundary(u_, w_, t + dt);
-  project(u_, w_, t + 0.5 * dt, phi_[2]);
+  project(u_, w_, t + 0.5 * dt, t + dt, phi_[2]);
 
   t_ = t + dt;
   stats_.steps += 1;
@@ -407,10 +487,11 @@ void FlowSolver::compute_pressure(Array2D& p) {
     for (int i = 0; i < g.nr; ++i) fw(i, g.nz) = fw(i, 0);
   }
 
+  // 물체가 있으면 경계 플럭스의 시간 변화율 = 물체 가속도
+  Operator& op = operator_at(t_, t_);
   std::vector<double> b;
-  face_flux_rhs(fu, fw, b);
-  remove_mean(b);
-  Operator& op = operator_at(t_);
+  face_flux_rhs(fu, fw, p_.body ? p_.body->a(t_) : 0.0, b);
+  remove_active_mean(b);
   Potential& x = phi_[3];
   record(refined_solve(op.matrix, op.preconditioner, b, x.hi, x.lo, opt_.pressure_tolerance,
                        opt_.max_iterations),
@@ -422,24 +503,26 @@ void FlowSolver::compute_pressure(Array2D& p) {
     for (int j = 0; j < g.nz; ++j) {
       const std::size_t k = static_cast<std::size_t>(i) * g.nz + j;
       p(i, j) = x.hi[k] + x.lo[k];
+      if (!geom_.active[k]) continue;  // 고체 셀은 평균에서 뺀다
       sum += p(i, j) * g.cell_volume(i);
       vol += g.cell_volume(i);
     }
   }
   const double mean = sum / vol;
-  for (double& v : p.data()) v -= mean;
+  for (std::size_t k = 0; k < p.data().size(); ++k) {
+    p.data()[k] = geom_.active[k] ? p.data()[k] - mean : 0.0;
+  }
 }
 
 double FlowSolver::max_divergence() const {
   const Grid& g = p_.grid;
+  // face_flux_rhs 와 같은 이산 발산 (b = −유출) 을 셀 체적으로 나눈 값
+  std::vector<double> b;
+  face_flux_rhs(u_, w_, p_.body ? p_.body->w(t_) : 0.0, b);
   double worst = 0.0;
   for (int i = 0; i < g.nr; ++i) {
-    const double aw = g.metric(g.rf(i)) * g.dz;
-    const double ae = g.metric(g.rf(i + 1)) * g.dz;
-    const double az = g.metric(g.rc(i)) * g.dr;
     for (int j = 0; j < g.nz; ++j) {
-      const double out = ae * u_(i + 1, j) - aw * u_(i, j) + az * (w_(i, j + 1) - w_(i, j));
-      worst = std::max(worst, std::abs(out / g.cell_volume(i)));
+      worst = std::max(worst, std::abs(b[static_cast<std::size_t>(i) * g.nz + j] / g.cell_volume(i)));
     }
   }
   return worst;

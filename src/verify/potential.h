@@ -1,0 +1,39 @@
+#pragma once
+
+// 회전타원체가 축 방향으로 움직일 때의 퍼텐셜 유동 (무한 유체, 비점성).
+// 근거: H. Lamb, Hydrodynamics, 6th ed. (1932), Art. 114 식 (6)–(12) [06_references.md R-21].
+//   φ = C z ∫_λ^∞ dλ' / ((c²+λ') Δ),  Δ = sqrt((c²+λ')(a²+λ')²),  C = a²c U / (2 − α₀),
+//   α₀ = a²c ∫_0^∞ dλ' / ((c²+λ') Δ),  부가질량 = α₀/(2−α₀) × ρ (4/3)π a² c.
+// 속도는 Lamb 의 부호 약속대로 u = −∇φ. 구(a = c)는 Art. 92 의 이중 원천 해와 같다.
+// 반경 방향 반축 a ≥ 축 방향 반축 c 인 경우(구, 납작한 회전타원체)만 다룬다. c → 0 은 얇은 원판 (Art. 102).
+// 적분은 s = sqrt(c²+λ) 로 바꾸면 닫힌 꼴: ∫ = (2/e²)(1/s)(1 − atan(x)/x), e² = a² − c², x = e/s.
+
+#include <array>
+
+namespace hcw::verify {
+
+class SpheroidPotential {
+ public:
+  SpheroidPotential(double a, double c);
+
+  double alpha0() const { return alpha0_; }
+  // 부가질량 계수 k = α₀/(2−α₀) (밀어낸 질량에 대한 비)
+  double added_mass_coefficient() const;
+  // 부가질량 (3차원). c = 0 (원판) 이면 (8/3)ρa³.
+  double added_mass(double rho) const;
+
+  // 물체 중심 기준 위치 (r, z) 의 유속 (u_r, u_z), 물체 속도 U = 1. 물체 바깥 점에서만 쓴다.
+  std::array<double, 2> velocity(double r, double z) const;
+
+  // ∫_λ^∞ dλ' / ((c²+λ') Δ)
+  double integral(double lambda) const;
+  // z²/(c²+λ) + r²/(a²+λ) = 1 의 양의 근 (안쪽이면 0)
+  double lambda(double r, double z) const;
+
+ private:
+  double a_, c_, e_;
+  double alpha0_, two_minus_alpha0_;
+  double coef_;  // C / U
+};
+
+}  // namespace hcw::verify
