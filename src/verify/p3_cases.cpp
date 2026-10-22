@@ -12,6 +12,7 @@
 #include "interface/two_phase.h"
 #include "interface/vof.h"
 #include "interface/vof_material.h"
+#include "verify/p1_cases.h"
 #include "verify/report_util.h"
 
 namespace hcw::verify {
@@ -32,6 +33,23 @@ TestReport p3_report(const std::string& id, const std::string& title) {
   rep.criteria_section = "1.3";
   rep.criteria_commit = "d74d3e8";
   return rep;
+}
+
+// 새 대류 방식(제한자, §1.3 "2상용 대류 방식과 그 검증", 기준 고정 8ffed34) 으로 다시 하는 판정 시험
+constexpr const char* kLimiterCommit = "8ffed34";
+
+flow::SolverOptions convection_options(bool limiter) {
+  flow::SolverOptions o;
+  if (limiter) o.convection = flow::Convection::VanLeer;
+  return o;
+}
+
+void mark_limiter(TestReport& rep, bool limiter) {
+  if (!limiter) return;
+  rep.id += "(lim)";
+  rep.criteria_commit = kLimiterCommit;
+  rep.notes.push_back("re-run with van Leer limiter momentum convection (03 section 1.3, locked 8ffed34); "
+                      "criteria unchanged");
 }
 
 Criterion all_at_most(const std::vector<GridRun>& runs, const std::string& key, double limit) {
@@ -211,8 +229,9 @@ double water_below_surface(double r0, double r1, double z0, double z1,
 
 }  // namespace
 
-TestReport run_2c(bool quick) {
+TestReport run_2c(bool quick, bool limiter) {
   TestReport rep = p3_report("2-C", "Axisymmetric standing wave in a circular tank with an air layer");
+  mark_limiter(rep, limiter);
   const double R = 1.0, h = 0.5, hp = 0.5, eps = 0.002, g0 = 9.81, rho_w = 1000.0, rho_a = 1.2;
   const double k = first_zero_j1() / R;
   // Lamb (1932) Art. 231 (11) + Art. 191·257: σ² = gk(ρ − ρ′)/(ρ coth kh + ρ′ coth kh′)
@@ -240,7 +259,7 @@ TestReport run_2c(bool quick) {
         }
       }
       auto mat = std::make_shared<interface::VofMaterial>(rho_w, 0.0, rho_a, 0.0);
-      interface::TwoPhaseSolver s(pb, mat, f0);
+      interface::TwoPhaseSolver s(pb, mat, f0, false, convection_options(limiter));
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       const double v0 = s.vof().water_volume();
       // Δt = 0.25 Δ / √(g h)  (§1.3 이 정하지 않아 여기서 정함)
@@ -341,8 +360,9 @@ bool runs_ok(const std::vector<GridRun>& runs) {
 }  // namespace
 
 // ---------------------------------------------------------------- 2-A
-TestReport run_2a(bool quick) {
+TestReport run_2a(bool quick, bool limiter) {
   TestReport rep = p3_report("2-A", "Water-air rest state (interface inside a cell), 1000 steps");
+  mark_limiter(rep, limiter);
   const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{32, 64};
   const int steps = quick ? 100 : 1000;
   for (Geometry geom : {Geometry::Planar, Geometry::Axisymmetric}) {
@@ -366,7 +386,7 @@ TestReport run_2a(bool quick) {
             pb.air_kappa = 1.4;
           }
           auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
-          interface::TwoPhaseSolver s(pb, mat, f0, compressible);
+          interface::TwoPhaseSolver s(pb, mat, f0, compressible, convection_options(limiter));
           s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; },
                        !compressible);
           if (compressible) s.flow().set_pressure(p0);
@@ -400,9 +420,10 @@ TestReport run_2a(bool quick) {
 }
 
 // ---------------------------------------------------------------- 2-F
-TestReport run_2f(bool quick) {
+TestReport run_2f(bool quick, bool limiter) {
   TestReport rep = p3_report("2-F", "Air springs: water column between two closed air pockets");
   rep.criteria_commit = "a48d360";  // 해석해에 공기층 관성 포함 (03 §1.3 2-F 변경 기록)
+  mark_limiter(rep, limiter);
   const double la = 0.2, lw = 1.0, p0 = 1e5, v0 = 0.01;
   const std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{8, 16, 32, 64};
   std::vector<std::vector<GridRun>> groups;
@@ -433,7 +454,7 @@ TestReport run_2f(bool quick) {
           }
         }
         auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
-        interface::TwoPhaseSolver s(pb, mat, f0, true);
+        interface::TwoPhaseSolver s(pb, mat, f0, true, convection_options(limiter));
         auto w_init = [&](double, double z) {
           if (z <= la) return v0 * z / la;
           if (z >= la + lw) return v0 * (2 * la + lw - z) / la;
@@ -515,12 +536,16 @@ TestReport run_2f(bool quick) {
   return rep;
 }
 
-// ---------------------------------------------------------------- 2-D (보고만)
+// ---------------------------------------------------------------- 2-D
+// 2026-10-23 보고만 → 판정 시험으로 변경 (03 §1.3, 기준 고정 8ffed34). 대류는 제한자 방식.
+// 이전 보고만 실행의 기록은 validation/records/WS-2026-10-22.md 에 있다.
 TestReport run_2d(bool quick) {
-  TestReport rep = p3_report("2-D", "Axisymmetric water column collapse (report only)");
+  TestReport rep = p3_report("2-D", "Axisymmetric water column collapse (stability)");
+  rep.criteria_commit = kLimiterCommit;
   const double a = 0.05;  // 기둥 반지름, 높이 2a
   const std::vector<int> ns = quick ? std::vector<int>{8} : std::vector<int>{16, 32};
   const double t_star_end = 3.0, t_scale = std::sqrt(a / kG);
+  const double v_limit = 3.0 * std::sqrt(2.0 * kG * 2.0 * a);  // 기둥 높이 자유낙하 속도의 3 배
   for (int n : ns) {
     GridRun run;
     run.n = n;
@@ -537,27 +562,29 @@ TestReport run_2d(bool quick) {
         for (int j = 0; j < g.nz; ++j) f0(i, j) = (g.rc(i) < a && g.zc(j) < 2 * a) ? 1.0 : 0.0;
       }
       auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
-      interface::TwoPhaseSolver s(pb, mat, f0);
+      interface::TwoPhaseSolver s(pb, mat, f0, false, convection_options(true));
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       const double v0 = s.vof().water_volume();
       // 적응 시간 간격: 고정 간격은 퍼지는 앞머리 속도를 따라가지 못해 VOF CFL 한계(0.5)를 넘었다
       // (2026-10-22 워크스테이션 1차 실행). 한 단계에 최대 1/4 칸만 움직이도록 줄인다.
       const double dt_max = 0.1 * g.dr / std::sqrt(kG * a);
       std::string hist;
-      double next = 0.0, vol = 0.0, dt_min = dt_max;
+      double next = 0.0, vol = 0.0, dt_min = dt_max, vmax_run = 0.0;
       while (s.time() < t_star_end * t_scale) {
         const double vmax = max_speed(s.flow());
         const double dt = vmax > 0.0 ? std::min(dt_max, 0.25 * std::min(g.dr, g.dz) / vmax) : dt_max;
         dt_min = std::min(dt_min, dt);
         s.step(dt);
         vol = std::max(vol, std::abs(s.vof().water_volume() - v0) / v0);
+        vmax_run = std::max(vmax_run, max_speed(s.flow()));
         if (s.time() >= next * t_scale) {
           double front = 0.0;  // 바닥 행에서 물이 닿은 반경 (물 비율 합 × Δr)
           for (int i = 0; i < g.nr; ++i) front += s.vof().f()(i, 0) * g.dr;
           hist += (hist.empty() ? "" : ", ") + fmt(s.time() / t_scale) + ":" + fmt(front / a);
           next += 0.5;
         }
-        if (s.flow().stats().solver_failed || max_speed(s.flow()) > 50.0) break;
+        // 폭주하면 끝까지 갈 필요가 없다 (속도 기준의 10 배에서 중단)
+        if (s.flow().stats().solver_failed || !(vmax_run <= 10.0 * v_limit)) break;
       }
       run.stats = s.flow().stats();
       if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
@@ -566,6 +593,7 @@ TestReport run_2d(bool quick) {
       run.metrics["end_time_over_scale"] = s.time() / t_scale;
       run.metrics["smallest_dt_over_initial"] = dt_min / dt_max;
       run.metrics["max_speed_at_end"] = max_speed(s.flow());
+      run.metrics["max_speed_over_run"] = vmax_run;
       rep.notes.push_back("a/dx=" + std::to_string(n) + " front r/a at t sqrt(g/a): " + hist);
       run.seconds = seconds_since(t0);
     } catch (const std::exception& e) {
@@ -573,14 +601,66 @@ TestReport run_2d(bool quick) {
     }
     rep.runs.push_back(run);
   }
-  rep.notes.push_back("report only (03 section 1.3): Martin & Moyce [R-17] data not verified, not a criterion");
-  rep.notes.push_back("adaptive dt = min(0.1 dx / sqrt(g a), 0.25 dx / max|u|)");
-  // 판정 없음: 실행 실패만 드러낸다
-  rep.verdict = "REPORT_ONLY";
-  for (const auto& r : rep.runs) {
-    if (!r.failure.empty()) rep.verdict = "REPORT_ONLY (" + r.failure.substr(0, r.failure.find(' ')) + ")";
+  if (runs_ok(rep.runs)) {
+    Criterion done;
+    done.text = "every grid reaches t sqrt(g/a) = 3";
+    done.passed = true;
+    for (const auto& r : rep.runs) {
+      done.passed = done.passed && r.metrics.at("end_time_over_scale") >= t_star_end - 1e-9;
+      done.detail += (done.detail.empty() ? "" : ", ") + fmt(r.metrics.at("end_time_over_scale"));
+    }
+    rep.criteria.push_back(done);
+    rep.criteria.push_back(all_at_most(rep.runs, "max_speed_over_run", v_limit));
+    rep.criteria.push_back(all_at_most(rep.runs, "volume_relative_change", 1e-8));
   }
-  if (quick) rep.verdict = "QUICK_CHECK_ONLY";
+  rep.notes.push_back("speed limit = 3 sqrt(2 g 2a) = " + fmt(v_limit) + " m/s (3 x free fall from the column height)");
+  rep.notes.push_back("front position vs Martin & Moyce [R-17] is report only (data not verified)");
+  rep.notes.push_back("van Leer limiter momentum convection; adaptive dt = min(0.1 dx / sqrt(g a), 0.25 dx / max|u|)");
+  conclude(rep, quick);
+  return rep;
+}
+
+// ---------------------------------------------------------------- 2-H
+// 새 대류 방식의 정확도: 1-C 와 1-A(b) 를 조건 그대로, 대류만 제한자로 (03 §1.3, 기준 고정 8ffed34)
+TestReport run_2h(bool quick) {
+  TestReport rep = p3_report("2-H", "Limiter convection accuracy: 1-C and 1-A(b) re-solved");
+  rep.criteria_commit = kLimiterCommit;
+  const std::vector<int> grids = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
+  for (const char* which : {"1-C", "1-A(b)"}) {
+    std::vector<GridRun> runs;
+    for (int n : grids) {
+      GridRun run;
+      try {
+        run = std::string(which) == "1-C" ? run_1c_grid(n, flow::Convection::VanLeer)
+                                          : run_1a_grid(n, true, flow::Convection::VanLeer);
+      } catch (const std::exception& e) {
+        run.n = n;
+        run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+      }
+      run.label = std::string(which) + " N=" + std::to_string(n);
+      runs.push_back(run);
+    }
+    if (runs_ok(runs)) {
+      for (const char* k : {"velocity_L2", "pressure_L2"}) {
+        Criterion c = monotone(runs, k);
+        c.text = std::string(which) + ": " + c.text;
+        rep.criteria.push_back(c);
+        c = order_at_least(runs, k, 1.5);
+        c.text = std::string(which) + ": " + c.text;
+        rep.criteria.push_back(c);
+      }
+      for (const char* k : {"velocity_Linf", "pressure_Linf"}) {
+        const auto& a = runs[runs.size() - 2].metrics.at(k);
+        const auto& b = runs.back().metrics.at(k);
+        rep.notes.push_back(std::string(which) + ": " + k + " order (two finest, report only) = " +
+                            fmt(observed_order(a, b)));
+      }
+    }
+    rep.runs.insert(rep.runs.end(), runs.begin(), runs.end());
+  }
+  rep.notes.push_back("conditions as in 03 sections 1.1 1-C and 1-A(b); only the momentum convection changes "
+                      "(van Leer limiter on the transported velocity, centred advecting velocity)");
+  conclude(rep, quick);
   return rep;
 }
 

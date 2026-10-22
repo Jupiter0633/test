@@ -66,10 +66,18 @@ struct Problem {
   double air_kappa = 0.0;
 };
 
+// 운동량 대류의 면 값 보간 방식.
+// Central: 2차 중심차분 (P1·P2 검증 방식).
+// VanLeer: 수송되는 속도를 van Leer 제한자로 상류 쪽에 치우쳐 보간한다 (P3 2상용, 03 §1.3 2-H).
+//   이동시키는 속도는 중심 평균 그대로이다. 매끈한 곳은 2차, 극값 근처는 1차 상류.
+//   격자 끝에서 상류 두 번째 값이 없으면 그 면은 중심 평균을 쓴다.
+enum class Convection { Central, VanLeer };
+
 struct SolverOptions {
   double projection_tolerance = 1e-12;
   double pressure_tolerance = 1e-13;
   int max_iterations = 50000;
+  Convection convection = Convection::Central;
 };
 
 struct SolverStats {

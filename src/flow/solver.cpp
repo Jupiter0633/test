@@ -354,6 +354,27 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
   fu.fill(0.0);
   fw.fill(0.0);
 
+  // 제한자 대류 (Convection::VanLeer): 면 값 = 상류 값 + ½·(van Leer 제한 기울기).
+  // qll, ql: 상류 쪽 두 값, qr: 하류 값 (속도 a 의 방향 기준으로 이미 고른 순서)
+  const bool limited = opt_.convection == Convection::VanLeer;
+  auto face_value = [](double qll, double ql, double qr) {
+    const double d1 = ql - qll, d2 = qr - ql;
+    const double s = d1 * d2 > 0.0 ? 2.0 * d1 * d2 / (d1 + d2) : 0.0;
+    return ql + 0.5 * s;
+  };
+  // a 방향의 상류 쪽으로 치우친 면 값. 면은 q0–q1 사이, qm 은 q0 뒤, qp 는 q1 앞.
+  // 필요한 상류 두 번째 값이 격자 밖이면 중심 평균.
+  auto upwind = [&](double a, double qm, bool has_m, double q0, double q1, double qp,
+                    bool has_p) {
+    if (a >= 0.0) return has_m ? face_value(qm, q0, q1) : 0.5 * (q0 + q1);
+    return has_p ? face_value(qp, q1, q0) : 0.5 * (q0 + q1);
+  };
+  // 넓은 스텐실의 접근 가능 여부 (U/W 는 유령 한 줄까지만 정의)
+  auto u_r_ok = [&](int i) { return periodic_r_ || (i >= 0 && i <= g.nr); };
+  auto u_z_ok = [&](int j) { return periodic_z_ || (j >= -1 && j <= g.nz); };
+  auto w_r_ok = [&](int i) { return periodic_r_ || (i >= -1 && i <= g.nr); };
+  auto w_z_ok = [&](int j) { return periodic_z_ || (j >= 0 && j <= g.nz); };
+
   // 꼭짓점 (r 면 fi, z 면 fj) 의 전단응력 τ_rz = μ (∂u/∂z + ∂w/∂r)
   auto tau_rz = [&](int fi, int fj) {
     return m.mu_corner(fi, fj) * ((U(u, fi, fj, t) - U(u, fi, fj - 1, t)) / g.dz +
@@ -368,13 +389,33 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
     for (int j = 0; j < g.nz; ++j) {
       const double u_l = 0.5 * (U(u, i - 1, j, t) + U(u, i, j, t));
       const double u_r = 0.5 * (U(u, i, j, t) + U(u, i + 1, j, t));
-      const double conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
-      auto flux_z = [&](int fj) {
-        const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
-        const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
-        return uc * wc;
-      };
-      const double conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+      double conv_r, conv_z;
+      if (!limited) {
+        conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
+        auto flux_z = [&](int fj) {
+          const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
+          const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+          return uc * wc;
+        };
+        conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+      } else {
+        // 셀 c (면 c 와 c+1 사이) 의 r 플럭스: 이동 속도 = 중심 평균, 수송 u = 제한 보간
+        auto flux_r = [&](int c, double a) {
+          const double q = upwind(a, u_r_ok(c - 1) ? U(u, c - 1, j, t) : 0.0, u_r_ok(c - 1),
+                                  U(u, c, j, t), U(u, c + 1, j, t),
+                                  u_r_ok(c + 2) ? U(u, c + 2, j, t) : 0.0, u_r_ok(c + 2));
+          return a * q;
+        };
+        conv_r = (m_r * flux_r(i, u_r) - m_l * flux_r(i - 1, u_l)) / (m_f * g.dr);
+        auto flux_z = [&](int fj) {
+          const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+          const double q = upwind(wc, u_z_ok(fj - 2) ? U(u, i, fj - 2, t) : 0.0, u_z_ok(fj - 2),
+                                  U(u, i, fj - 1, t), U(u, i, fj, t),
+                                  u_z_ok(fj + 1) ? U(u, i, fj + 1, t) : 0.0, u_z_ok(fj + 1));
+          return q * wc;
+        };
+        conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+      }
 
       auto tau_rr = [&](int c) {
         return 2.0 * m.mu_cell(wrap_r(c), j) * (U(u, c + 1, j, t) - U(u, c, j, t)) / g.dr;
@@ -399,15 +440,35 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
     const double m_w = g.metric(g.rf(i));
     const double m_e = g.metric(g.rf(i + 1));
     for (int j = jw_lo_; j < jw_hi_; ++j) {
-      auto flux_r = [&](int fi) {
-        const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
-        const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
-        return uc * wc;
-      };
-      const double conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
       const double w_s = 0.5 * (W(w, i, j - 1, t) + W(w, i, j, t));
       const double w_n = 0.5 * (W(w, i, j, t) + W(w, i, j + 1, t));
-      const double conv_z = (w_n * w_n - w_s * w_s) / g.dz;
+      double conv_r, conv_z;
+      if (!limited) {
+        auto flux_r = [&](int fi) {
+          const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+          const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
+          return uc * wc;
+        };
+        conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
+        conv_z = (w_n * w_n - w_s * w_s) / g.dz;
+      } else {
+        auto flux_r = [&](int fi) {
+          const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+          const double q = upwind(uc, w_r_ok(fi - 2) ? W(w, fi - 2, j, t) : 0.0, w_r_ok(fi - 2),
+                                  W(w, fi - 1, j, t), W(w, fi, j, t),
+                                  w_r_ok(fi + 1) ? W(w, fi + 1, j, t) : 0.0, w_r_ok(fi + 1));
+          return uc * q;
+        };
+        conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
+        // 셀 c (z 면 c 와 c+1 사이) 의 z 플럭스
+        auto flux_z = [&](int c, double a) {
+          const double q = upwind(a, w_z_ok(c - 1) ? W(w, i, c - 1, t) : 0.0, w_z_ok(c - 1),
+                                  W(w, i, c, t), W(w, i, c + 1, t),
+                                  w_z_ok(c + 2) ? W(w, i, c + 2, t) : 0.0, w_z_ok(c + 2));
+          return a * q;
+        };
+        conv_z = (flux_z(j, w_n) - flux_z(j - 1, w_s)) / g.dz;
+      }
 
       const double visc_r = (m_e * tau_rz(i + 1, j) - m_w * tau_rz(i, j)) / (m_c * g.dr);
       auto tau_zz = [&](int c) {

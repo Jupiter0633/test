@@ -130,7 +130,7 @@ std::array<double, 2> mms_source(const MmsSpace& s, double r, double t, bool var
   return {u_t + conv_u + (p.r - div_tau_r) / rho, w_t + conv_w + (p.z - div_tau_z) / rho};
 }
 
-GridRun run_1a_grid(int n, bool variable) {
+GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv) {
   GridRun run;
   run.n = n;
   run.label = "N=" + std::to_string(n);
@@ -194,7 +194,9 @@ GridRun run_1a_grid(int n, bool variable) {
     return MmsTime(t_end).c * std::cos(kPi * r) * std::cos(2 * kPi * z);
   };
 
-  FlowSolver s(pb);
+  flow::SolverOptions opt;
+  opt.convection = conv;
+  FlowSolver s(pb, opt);
   s.initialize(0.0, u_exact(0.0), w_exact(0.0));
   advance_to(s, t_end, 0.064 * g.dr);
 
@@ -214,6 +216,10 @@ GridRun run_1a_grid(int n, bool variable) {
 
 }  // namespace
 
+GridRun run_1a_grid(int n, bool variable, flow::Convection conv) {
+  return run_1a_grid_impl(n, variable, conv);
+}
+
 double observed_order(double e_coarse, double e_fine) {
   return std::log(e_coarse / e_fine) / std::log(2.0);
 }
@@ -226,7 +232,7 @@ TestReport run_1a(bool variable, bool quick) {
   const std::vector<int> grids = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
   for (int n : grids) {
     try {
-      rep.runs.push_back(run_1a_grid(n, variable));
+      rep.runs.push_back(run_1a_grid(n, variable, flow::Convection::Central));
     } catch (const std::exception& e) {
       GridRun r;
       r.n = n;
@@ -345,55 +351,59 @@ TestReport run_1b(bool quick) {
 }
 
 // ---------------------------------------------------------------- 1-C
+// 1-C 한 격자 (2-H 에서 대류 방식만 바꿔 다시 쓴다)
+GridRun run_1c_grid(int n, flow::Convection conv) {
+  const double nu = 0.01, t_end = 1.0, L = 2.0 * kPi;
+  GridRun run;
+  run.n = n;
+  run.label = "N=" + std::to_string(n);
+  const auto t0 = std::chrono::steady_clock::now();
+  try {
+    Problem pb;
+    pb.grid = Grid(Geometry::Planar, n, n, 0.0, L, 0.0, L);
+    const Grid g = pb.grid;
+    pb.bc.r_min.kind = pb.bc.r_max.kind = BoundaryKind::Periodic;
+    pb.bc.z_min.kind = pb.bc.z_max.kind = BoundaryKind::Periodic;
+    pb.material = std::make_shared<flow::SmoothMaterial>(
+        [](double, double, double) { return 1.0; }, [nu](double, double, double) { return nu; },
+        false);
+    auto u_ex = [nu](double t) {
+      return [=](double x, double y) { return std::sin(x) * std::cos(y) * std::exp(-2 * nu * t); };
+    };
+    auto v_ex = [nu](double t) {
+      return [=](double x, double y) { return -std::cos(x) * std::sin(y) * std::exp(-2 * nu * t); };
+    };
+    auto p_ex = [nu, t_end](double x, double y) {
+      return 0.25 * (std::cos(2 * x) + std::cos(2 * y)) * std::exp(-4 * nu * t_end);
+    };
+    flow::SolverOptions opt;
+    opt.convection = conv;
+    FlowSolver s(pb, opt);
+    s.initialize(0.0, u_ex(0.0), v_ex(0.0));
+    advance_to(s, t_end, 0.2 * g.dr);
+    const ErrorNorm ev = velocity_error(s, u_ex(t_end), v_ex(t_end));
+    Array2D p;
+    s.compute_pressure(p);
+    const ErrorNorm ep = pressure_error(g, p, p_ex);
+    run.metrics["velocity_L2"] = ev.l2();
+    run.metrics["velocity_Linf"] = ev.max_abs;
+    run.metrics["pressure_L2"] = ep.l2();
+    run.metrics["pressure_Linf"] = ep.max_abs;
+    run.metrics["max_divergence"] = s.max_divergence();
+    run.seconds = seconds_since(t0);
+    finish_run(run, s);
+  } catch (const std::exception& e) {
+    run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+  }
+  return run;
+}
+
 TestReport run_1c(bool quick) {
   TestReport rep;
   rep.id = "1-C";
   rep.title = "Taylor-Green vortex (planar, periodic)";
   const std::vector<int> grids = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
-  const double nu = 0.01, t_end = 1.0, L = 2.0 * kPi;
-
-  for (int n : grids) {
-    GridRun run;
-    run.n = n;
-    run.label = "N=" + std::to_string(n);
-    const auto t0 = std::chrono::steady_clock::now();
-    try {
-      Problem pb;
-      pb.grid = Grid(Geometry::Planar, n, n, 0.0, L, 0.0, L);
-      const Grid g = pb.grid;
-      pb.bc.r_min.kind = pb.bc.r_max.kind = BoundaryKind::Periodic;
-      pb.bc.z_min.kind = pb.bc.z_max.kind = BoundaryKind::Periodic;
-      pb.material = std::make_shared<flow::SmoothMaterial>(
-          [](double, double, double) { return 1.0; }, [nu](double, double, double) { return nu; },
-          false);
-      auto u_ex = [nu](double t) {
-        return [=](double x, double y) { return std::sin(x) * std::cos(y) * std::exp(-2 * nu * t); };
-      };
-      auto v_ex = [nu](double t) {
-        return [=](double x, double y) { return -std::cos(x) * std::sin(y) * std::exp(-2 * nu * t); };
-      };
-      auto p_ex = [nu, t_end](double x, double y) {
-        return 0.25 * (std::cos(2 * x) + std::cos(2 * y)) * std::exp(-4 * nu * t_end);
-      };
-      FlowSolver s(pb);
-      s.initialize(0.0, u_ex(0.0), v_ex(0.0));
-      advance_to(s, t_end, 0.2 * g.dr);
-      const ErrorNorm ev = velocity_error(s, u_ex(t_end), v_ex(t_end));
-      Array2D p;
-      s.compute_pressure(p);
-      const ErrorNorm ep = pressure_error(g, p, p_ex);
-      run.metrics["velocity_L2"] = ev.l2();
-      run.metrics["velocity_Linf"] = ev.max_abs;
-      run.metrics["pressure_L2"] = ep.l2();
-      run.metrics["pressure_Linf"] = ep.max_abs;
-      run.metrics["max_divergence"] = s.max_divergence();
-      run.seconds = seconds_since(t0);
-      finish_run(run, s);
-    } catch (const std::exception& e) {
-      run.failure = std::string("FAILED_EXCEPTION ") + e.what();
-    }
-    rep.runs.push_back(run);
-  }
+  for (int n : grids) rep.runs.push_back(run_1c_grid(n, flow::Convection::Central));
   if (std::all_of(rep.runs.begin(), rep.runs.end(), [](const GridRun& r) { return r.failure.empty(); })) {
     for (const char* k : {"velocity_L2", "velocity_Linf", "pressure_L2", "pressure_Linf"}) {
       rep.criteria.push_back(monotone(rep.runs, k));

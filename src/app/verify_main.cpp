@@ -119,7 +119,7 @@ void usage() {
   std::cout << "usage: hcw_verify <test | P1 | P2> [--quick]\n"
                "  P1 tests: 1A, 1A-a, 1A-b, 1B, 1C, 1D   ('all' = P1, kept for compatibility)\n"
                "  P2 tests: 1E, 1F, 1G, 1H\n"
-               "  P3 tests: 2A, 2B, 2C, 2D (report only), 2F\n"
+               "  P3 tests: 2A, 2B, 2C, 2D, 2F, 2H, 2A-lim, 2C-lim, 2F-lim (-lim: limiter convection)\n"
                "  --quick   reduced grids for a fast functional check (no verdict)\n"
                "exit code: 0 if every requested test is VERIFIED (or quick mode), 4 otherwise\n";
 }
@@ -145,10 +145,11 @@ int main(int argc, char** argv) {
   std::vector<std::string> tests;
   if (what == "all" || what == "P1") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
   else if (what == "P2") tests = {"1E", "1F", "1G", "1H"};
-  else if (what == "P3") tests = {"2A", "2B", "2C", "2D", "2F"};
+  else if (what == "P3") tests = {"2A", "2B", "2C", "2D", "2F", "2H", "2A-lim", "2C-lim", "2F-lim"};
   else if (what == "1A") tests = {"1A-a", "1A-b"};
   else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D" ||
-           what == "1E" || what == "1F" || what == "1G" || what == "1H" || what == "2A" || what == "2B" || what == "2C" || what == "2D" || what == "2F")
+           what == "1E" || what == "1F" || what == "1G" || what == "1H" || what == "2A" || what == "2B" || what == "2C" || what == "2D" || what == "2F" ||
+           what == "2H" || what == "2A-lim" || what == "2C-lim" || what == "2F-lim")
     tests = {what};
   else {
     usage();
@@ -174,6 +175,10 @@ int main(int argc, char** argv) {
     if (t == "2C") rep = run_2c(quick);
     if (t == "2D") rep = run_2d(quick);
     if (t == "2F") rep = run_2f(quick);
+    if (t == "2H") rep = run_2h(quick);
+    if (t == "2A-lim") rep = run_2a(quick, true);
+    if (t == "2C-lim") rep = run_2c(quick, true);
+    if (t == "2F-lim") rep = run_2f(quick, true);
     const std::string text = render(rep, header);
     std::cout << text;
     if (!quick) save(rep.phase, rep.id, text, quick);

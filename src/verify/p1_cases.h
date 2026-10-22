@@ -45,6 +45,11 @@ TestReport run_1b(bool quick);
 TestReport run_1c(bool quick);
 TestReport run_1d(bool quick);
 
+// 한 격자 실행 (조건은 위 시험과 같고 대류 방식만 고름). P3 2-H 가 새 대류 방식으로 다시 쓴다.
+// run_1a_grid 는 예외를 그대로 던진다.
+GridRun run_1a_grid(int n, bool variable_density, flow::Convection convection);
+GridRun run_1c_grid(int n, flow::Convection convection);
+
 // p_obs = ln(e_coarse / e_fine) / ln 2
 double observed_order(double e_coarse, double e_fine);
 

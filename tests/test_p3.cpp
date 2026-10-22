@@ -1,9 +1,12 @@
 // P3 단위 시험: PLIC 기하, VOF 수송의 보존과 범위.
 
 #include <cmath>
+#include <algorithm>
 #include <iostream>
+#include <memory>
 #include <string>
 
+#include "flow/solver.h"
 #include "interface/plic.h"
 #include "interface/vof.h"
 #include "verify/p3_cases.h"
@@ -123,6 +126,38 @@ void test_refuses_bad_input() {
   expect(threw, "CFL above 0.5 is refused");
 }
 
+// 제한자 대류: 균일 흐름 u = 1 이 계단 모양 w(x) 를 그대로 옮기는 문제 (주기, 비점성, 압력 0).
+// van Leer 는 새 극값을 만들지 않고, 중심차분은 넘침을 만든다 (시험이 구별력을 갖는지 확인).
+void test_limiter_no_new_extrema() {
+  auto run = [](flow::Convection c) {
+    flow::Problem pb;
+    pb.grid = Grid(Geometry::Planar, 32, 4, 0.0, 1.0, 0.0, 0.125);
+    pb.bc.r_min.kind = pb.bc.r_max.kind = flow::BoundaryKind::Periodic;
+    pb.bc.z_min.kind = pb.bc.z_max.kind = flow::BoundaryKind::Periodic;
+    pb.material = std::make_shared<flow::SmoothMaterial>([](double, double, double) { return 1.0; },
+                                                         [](double, double, double) { return 0.0; }, false);
+    flow::SolverOptions o;
+    o.convection = c;
+    flow::FlowSolver s(pb, o);
+    s.initialize(0.0, [](double, double) { return 1.0; },
+                 [](double x, double) { return (x > 0.25 && x < 0.5) ? 1.0 : 0.0; });
+    const double dt = 0.4 * pb.grid.dr;
+    double lo = 0.0, hi = 1.0;
+    for (int k = 0; k < 40; ++k) {
+      s.step(dt);
+      for (double v : s.w().data()) {
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+      }
+    }
+    return std::max(-lo, hi - 1.0);  // [0, 1] 밖으로 나간 양
+  };
+  const double over_vl = run(flow::Convection::VanLeer);
+  const double over_c = run(flow::Convection::Central);
+  expect(over_vl <= 1e-12, "van Leer convection makes no new extrema (" + std::to_string(over_vl) + ")");
+  expect(over_c > 1e-3, "central convection overshoots on the same step (" + std::to_string(over_c) + ")");
+}
+
 }  // namespace
 
 int main() {
@@ -131,6 +166,7 @@ int main() {
   test_rotation(Geometry::Planar);
   test_rotation(Geometry::Axisymmetric);
   test_refuses_bad_input();
+  test_limiter_no_new_extrema();
   std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   return g_failures == 0 ? 0 : 1;
 }
