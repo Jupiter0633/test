@@ -16,6 +16,7 @@ struct MaterialArrays {
   Array2D mu_u;       // r 면 (nr+1, nz): 원주 응력 항
   Array2D mu_cell;    // 셀 중심 (nr, nz): 수직 응력
   Array2D mu_corner;  // 격자 꼭짓점 (nr+1, nz+1): 전단 응력
+  Array2D air_fraction;  // 셀 중심 (nr, nz): 공기 체적분율 (압축성 공기용, 단상 물성은 0)
 };
 
 class Material {

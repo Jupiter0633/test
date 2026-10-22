@@ -6,12 +6,13 @@ namespace hcw::flow {
 namespace {
 
 void allocate(const Grid& g, MaterialArrays& m) {
-  if (m.rho_u.ni() == g.nr + 1 && m.rho_u.nj() == g.nz) return;
+  if (m.rho_u.ni() == g.nr + 1 && m.rho_u.nj() == g.nz && m.air_fraction.ni() == g.nr) return;
   m.rho_u = Array2D(g.nr + 1, g.nz);
   m.rho_w = Array2D(g.nr, g.nz + 1);
   m.mu_u = Array2D(g.nr + 1, g.nz);
   m.mu_cell = Array2D(g.nr, g.nz);
   m.mu_corner = Array2D(g.nr + 1, g.nz + 1);
+  m.air_fraction = Array2D(g.nr, g.nz);
 }
 
 }  // namespace

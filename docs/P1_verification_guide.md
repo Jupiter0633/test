@@ -38,3 +38,17 @@ out\build\windows-x64-release\hcw_verify.exe all
 | `QUICK_CHECK_ONLY` | 축소판 실행. 판정 아님 |
 
 `report.txt` 의 첫 부분에 코드 커밋, 컴파일러, 기기 이름이 기록됩니다. 판정 기록(`validation/records/`)은 이 파일을 근거로 작성합니다.
+
+## 4. 정식 판정 전에는 빌드 폴더를 지우고 새로 빌드 (2026-10-22 추가)
+
+```bat
+rmdir /s /q out\build\windows-x64-release
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release
+```
+
+- 이유: 한국어 Visual Studio 의 컴파일러는 헤더 의존 정보(`/showIncludes`)를 한국어로 출력합니다.
+  - 빌드 폴더를 처음 만들 때 CMake 가 기록한 문구의 인코딩이 실제 출력과 어긋나면, Ninja 가 헤더 의존성을 기록하지 못합니다.
+  - 그러면 헤더만 바뀐 경우 그 헤더를 쓰는 파일이 다시 컴파일되지 않습니다. 이전 코드와 새 코드가 섞인 프로그램이 만들어질 수 있습니다.
+- 2026-10-22 노트북에서 실제로 확인했습니다. 빌드 폴더를 새로 만든 뒤에는 의존성이 정상 기록되는 것도 확인했습니다.
+- 정식 판정은 반드시 새로 만든 빌드 폴더에서, 수정 없는 커밋으로 실행합니다.

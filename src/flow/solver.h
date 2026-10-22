@@ -61,6 +61,9 @@ struct Problem {
   // 물체 (없으면 nullptr). 현재 압력 방정식(투영, 압력 출력)만 물체를 반영한다.
   // 물체 근처 운동량(점성 no-slip, 이동 경계의 새 셀)은 아직 구현 전이라 step() 은 거부한다.
   std::shared_ptr<const Body> body;
+  // 압축성 공기 (P3, D-03): 폴리트로프 지수 κ (> 0 이면 켬). 공기 압축률 ψ = (공기 체적분율)/(κ p),
+  // p 는 절대 압력. step_implicit 에서만 쓴다 (step 은 거부). 0 이면 비압축.
+  double air_kappa = 0.0;
 };
 
 struct SolverOptions {
@@ -98,8 +101,12 @@ class FlowSolver {
   bool solves_w(int j) const { return j >= jw_lo_ && j < jw_hi_; }
 
   // 면 속도를 함수로 설정한 뒤 경계값을 넣고 투영한다.
+  // project = false 이면 초기 속도를 투영하지 않고 그대로 둔다 (압축성 공기의 초기 압축 속도 등).
   void initialize(double t0, const std::function<double(double, double)>& u0,
-                  const std::function<double(double, double)>& w0);
+                  const std::function<double(double, double)>& w0, bool project = true);
+
+  // step_implicit 이 쓰는 압력장을 지정한다 (예: 정수압 + 대기압). 압축성 공기에서는 절대 압력.
+  void set_pressure(const Array2D& p) { p_inc_ = p; }
 
   void step(double dt);
 
@@ -198,6 +205,7 @@ class FlowSolver {
   double visc_time_ = -1.0;
   bool visc_valid_ = false;
   std::vector<double> mom_x_;  // 직전 운동량 해 (초기 추정)
+  std::vector<double> psi_vol_;  // 압축성 공기: 셀마다 ψ V / Δt² (투영 연산자의 대각에 더함)
   body::CutGeometry pgeom_;    // 운동량 모드의 압력 기하
   Operator op_mom_;            // 운동량 모드의 투영 연산자
 };

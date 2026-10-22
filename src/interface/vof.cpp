@@ -123,6 +123,17 @@ void Vof::advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt, in
     sweep_z(qw, dt, c);
     sweep_r(qu, dt, c);
   }
+  // Weymouth–Yue 항은 두 분할 단계에서 c·(∇·u)Δt 를 더한다. 흐름이 발산 0 이면 합이 0 이지만,
+  // 압축성 공기처럼 실제 발산이 있으면 물을 만들거나 없앤다. 실제(두 방향 합) 발산 부분을 되돌려
+  // 물 체적을 정확히 보존한다 (발산 0 인 흐름에서는 반올림 수준의 차이).
+  for (int i = 0; i < g_.nr; ++i) {
+    const double vol = g_.cell_volume(i);
+    for (int j = 0; j < g_.nz; ++j) {
+      if (!c[static_cast<std::size_t>(i) * g_.nz + j]) continue;
+      const double div = (qu(i + 1, j) - qu(i, j) + qw(i, j + 1) - qw(i, j)) * dt;
+      f_(i, j) -= div / vol;
+    }
+  }
   ++steps_;
 }
 

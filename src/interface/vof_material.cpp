@@ -118,6 +118,10 @@ void VofMaterial::evaluate(const flow::Grid& g, double t, flow::MaterialArrays& 
   m.rho_w = flow::Array2D(g.nr, g.nz + 1);
   m.mu_cell = flow::Array2D(g.nr, g.nz);
   m.mu_corner = flow::Array2D(g.nr + 1, g.nz + 1);
+  m.air_fraction = flow::Array2D(g.nr, g.nz);
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) m.air_fraction(i, j) = 1.0 - lerp(a_.cell, b_.cell, i, j);
+  }
   for (int i = 0; i <= g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
       const double ff = lerp(a_.face_u, b_.face_u, i, j);

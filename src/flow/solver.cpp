@@ -214,7 +214,15 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op,
   // 우변의 합이 0 이면 그 셀의 해가 0 이 되며 나머지 해는 바뀌지 않는다.
   // 마지막 셀을 고르는 이유: 불완전 Cholesky 의 마지막 피벗이 특이성 때문에
   // 0 에 가까워지는데, 그 피벗을 직접 보강해야 큰 밀도비(1000)에서도 무너지지 않는다.
-  rows[n - 1][n - 1] *= 2.0;
+  if (p_.air_kappa > 0.0) {
+    // 압축성 공기: ∇·(∇φ/ρ) − ψ φ/Δt² = ∇·u*  →  대각에 ψ V/Δt² 를 더한다.
+    // 이 항이 있으면 행렬이 정칙이라 정칙화(고정 셀)를 하지 않는다 (절대 압력).
+    for (int c = 0; c < n && static_cast<std::size_t>(c) < psi_vol_.size(); ++c) {
+      if (gm.active[static_cast<std::size_t>(c)]) rows[c][c] += psi_vol_[static_cast<std::size_t>(c)];
+    }
+  } else {
+    rows[n - 1][n - 1] *= 2.0;
+  }
 
   CsrMatrix& a = op.matrix;
   a.n = n;
@@ -256,6 +264,7 @@ void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw, double body
 }
 
 void FlowSolver::remove_active_mean(std::vector<double>& b) const {
+  if (p_.air_kappa > 0.0) return;  // 압축성: 정칙 행렬이라 우변 평균을 빼지 않는다
   if (!p_.body) {
     remove_mean(b);
     return;
@@ -423,7 +432,7 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
 }
 
 void FlowSolver::initialize(double t0, const std::function<double(double, double)>& u0,
-                            const std::function<double(double, double)>& w0) {
+                            const std::function<double(double, double)>& w0, bool do_project) {
   const Grid& g = p_.grid;
   t_ = t0;
   for (int i = 0; i <= g.nr; ++i) {
@@ -433,10 +442,13 @@ void FlowSolver::initialize(double t0, const std::function<double(double, double
     for (int j = 0; j <= g.nz; ++j) w_(i, j) = w0(g.rc(i), g.zf(j));
   }
   apply_boundary(u_, w_, t0);
-  project(u_, w_, t0, t0, phi_[4]);
+  if (do_project) project(u_, w_, t0, t0, phi_[4]);
 }
 
 void FlowSolver::step(double dt) {
+  if (p_.air_kappa > 0.0) {
+    throw std::logic_error("compressible air needs step_implicit (absolute pressure is carried there)");
+  }
   if (p_.body) {
     throw std::logic_error(
         "time stepping with a body is not implemented yet (P2: near-body momentum pending)");
@@ -807,6 +819,20 @@ void FlowSolver::step_implicit(double dt) {
   update_geometry(t1);
   std::vector<double> b_raw;
   face_flux_rhs(un, wn, ub_w, b_raw);
+  if (p_.air_kappa > 0.0) {
+    // ψ V / Δt², ψ = (공기 체적분율)/(κ p^n) — 압력은 직전 값으로 선형화
+    psi_vol_.assign(static_cast<std::size_t>(g.nr) * nz, 0.0);
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        const double pa = p_inc_(i, j);
+        if (!(pa > 0.0)) throw std::runtime_error("compressible air: non-positive absolute pressure");
+        psi_vol_[static_cast<std::size_t>(i) * nz + j] =
+            m.air_fraction(i, j) / (p_.air_kappa * pa) * g.cell_volume(i) / (dt * dt);
+      }
+    }
+    op_.valid = false;
+    op_mom_.valid = false;
+  }
   if (!p_.body) {
     project(un, wn, t1, t1, phi_[0]);
   } else {
@@ -860,7 +886,8 @@ void FlowSolver::step_implicit(double dt) {
     for (int j = 0; j < nz; ++j) {
       const std::size_t k = static_cast<std::size_t>(i) * nz + j;
       if (!pg.active[k]) continue;
-      const double div = -b_raw[k] / g.cell_volume(i);
+      // 회전형 항은 ∇·u = 0 을 전제로 하므로 압축성 공기에서는 쓰지 않는다
+      const double div = p_.air_kappa > 0.0 ? 0.0 : -b_raw[k] / g.cell_volume(i);
       p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / dt - m.mu_cell(i, j) * div;
       sum += p_inc_(i, j) * g.cell_volume(i);
       vol += g.cell_volume(i);
@@ -868,7 +895,9 @@ void FlowSolver::step_implicit(double dt) {
   }
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < nz; ++j) {
-      p_inc_(i, j) = pg.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - sum / vol : 0.0;
+      // 압축성 공기에서는 절대 압력이므로 평균을 빼지 않는다
+      const double shift = p_.air_kappa > 0.0 ? 0.0 : sum / vol;
+      p_inc_(i, j) = pg.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - shift : 0.0;
     }
   }
 
