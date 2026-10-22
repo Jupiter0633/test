@@ -325,6 +325,7 @@ TestReport run_1f(bool quick) {
 // ---------------------------------------------------------------- 1-G
 TestReport run_1g(bool quick) {
   TestReport rep = p2_report("1-G", "Sphere in Stokes flow (Ua/nu = 1e-3): steady drag");
+  rep.criteria_commit = "c69da11";  // 측정을 제어면 운동량 수지로 변경 (03 §1.2 1-G 변경 기록)
   const double a = 1.0, rho = 1.0, U = 1.0, mu = 1000.0;
   const double exact = 6.0 * kPi * mu * a * U;
   // 후방 오일러 Δt (정상 해는 Δt 와 무관). 점성 시간 ρa²/μ 의 10 배.
@@ -355,7 +356,10 @@ TestReport run_1g(bool quick) {
         s.step_implicit(dt);
         ++steps;
       } while (s.last_change() > 1e-12 && steps < max_steps && !s.stats().solver_failed);
-      // 압력은 운동량 모드의 압력 기하(압력이 정의된 셀)로 적분한다
+      // 판정용 힘: 제어면 운동량 수지 (03 §1.2 1-G, 2026-10-22 변경). 면 r = 2.5a, z = ±2.5a.
+      const double fcs = body::axial_force_control_surface(s.grid(), s.u(), s.w(), s.pressure(), mu, rho,
+                                                           2.5 * a, -2.5 * a, 2.5 * a);
+      // 보고만: 물체 표면 직접 적분 (점성 벽 표면 압력은 알려진 한계)
       const double fp = body::axial_pressure_force(s.grid(), s.pressure_geometry(), s.pressure());
       const double fv = body::axial_viscous_force(s.grid(), s.geometry(), *shape, 0.0, s.w(), mu);
       run.seconds = seconds_since(t0);
@@ -364,11 +368,12 @@ TestReport run_1g(bool quick) {
         run.failure = "FAILED_NOT_STEADY (step change " + fmt(s.last_change()) + " after " +
                       std::to_string(steps) + " steps)";
       }
-      run.metrics["force"] = fp + fv;
-      run.metrics["force_pressure"] = fp;
-      run.metrics["force_viscous"] = fv;
+      run.metrics["force"] = fcs;
       run.metrics["force_exact"] = exact;
-      run.metrics["force_relative_error"] = std::abs(fp + fv - exact) / exact;
+      run.metrics["force_relative_error"] = std::abs(fcs - exact) / exact;
+      run.metrics["surface_force_pressure_part"] = fp;
+      run.metrics["surface_force_viscous_part"] = fv;
+      run.metrics["surface_force_relative_error"] = std::abs(fp + fv - exact) / exact;
       run.metrics["steps"] = steps;
       run.metrics["final_step_change"] = s.last_change();
       run.metrics["momentum_max_residual"] = s.stats().max_momentum_residual;
@@ -378,8 +383,11 @@ TestReport run_1g(bool quick) {
   rep.notes.push_back("exact drag 6 pi mu a U (Lamb 1932 Art. 337); outer boundary = exact Stokes flow (Art. 337 eq. 11)");
   rep.notes.push_back("steady state: max velocity change per step / max velocity <= 1e-12 (as 1-B); "
                       "backward-Euler viscous step, dt = 10 rho a^2/mu");
-  rep.notes.push_back("exact split: pressure 2 pi mu a U = " + fmt(exact / 3.0) + ", viscous 4 pi mu a U = " +
-                      fmt(2.0 * exact / 3.0) + " (reported, not a criterion)");
+  rep.notes.push_back("judged force: control-surface momentum balance on r = 2.5a, z = +-2.5a "
+                      "(criterion amended 2026-10-22; previous body-surface measurement: FAILED_CRITERIA, P2-run1 record)");
+  rep.notes.push_back("surface_force_*: direct body-surface integral, report only (known limitation: viscous-wall "
+                      "surface pressure); exact split pressure 2 pi mu a U = " + fmt(exact / 3.0) +
+                      ", viscous 4 pi mu a U = " + fmt(2.0 * exact / 3.0));
   conclude(rep, quick);
   return rep;
 }

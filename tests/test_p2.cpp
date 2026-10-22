@@ -229,6 +229,17 @@ void test_stokes_exact() {
   expect(std::abs(fv / (4 * kPi * mu * a * U) - 1.0) < 0.03,
          "Stokes sphere: viscous drag 4 pi mu a U (" + std::to_string(fv / (4 * kPi)) + ")");
   expect(!mc.forcing.empty(), "faces next to the sphere are forcing faces");
+  // 제어면 운동량 수지 (Stokes 장이므로 대류 항 없이 ρ = 0): 6πμaU
+  const double fcs = body::axial_force_control_surface(g, u, w, p, mu, 0.0, 2.5, -2.5, 2.5);
+  expect(std::abs(fcs / (6 * kPi * mu * a * U) - 1.0) < 2e-3,
+         "Stokes sphere: control-surface drag 6 pi mu a U (" + std::to_string(fcs / (6 * kPi)) + ")");
+  bool threw = false;
+  try {
+    body::axial_force_control_surface(g, u, w, p, mu, 0.0, 2.51, -2.5, 2.5);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  expect(threw, "control surface off the grid faces is refused");
 }
 
 // 반암시적 진행(step_implicit)의 정상 해 = 검증된 명시적 진행(step)의 정상 해 (물체 없음)

@@ -23,4 +23,13 @@ double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const 
 double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const Shape& shape,
                            double z_center, const flow::Array2D& w, double mu, double body_w = 0.0);
 
+// 제어면 운동량 수지로 구한 물체의 축 방향 힘 (정상 상태, 축대칭, 2π 포함).
+// 닫힌 면: 옆면 r = rs, 아랫면 z = z_bottom, 윗면 z = z_top (모두 격자면에 맞아야 한다).
+//   F_z = ∮ [ −p n_z + (τ·n)_z − ρ u_z (u·n) ] dA
+// 윗·아랫면: p 는 이웃 두 셀 평균, τ_zz = 2μ ∂w/∂z (중심 차분). 옆면: τ_rz = μ(∂u/∂z + ∂w/∂r) (중심 차분).
+// 면과 물체 사이에 다른 힘이 없으면 물체 표면의 유체력과 같다. 근거: 03_verification_plan.md §1.2 1-G.
+double axial_force_control_surface(const flow::Grid& g, const flow::Array2D& u,
+                                   const flow::Array2D& w, const flow::Array2D& p, double mu,
+                                   double rho, double rs, double z_bottom, double z_top);
+
 }  // namespace hcw::body

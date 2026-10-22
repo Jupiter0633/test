@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <string>
 
 namespace hcw::body {
 namespace {
@@ -136,6 +138,44 @@ double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const 
   for (const auto& piece : geom.pieces) {
     // nz_area 의 법선은 유체에서 물체 쪽 → 물체가 받는 힘은 + p · nz_area
     f += extrapolate(g, geom, p, piece.i, piece.j, piece.r, piece.z) * piece.nz_area;
+  }
+  return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
+}
+
+double axial_force_control_surface(const flow::Grid& g, const flow::Array2D& u,
+                                   const flow::Array2D& w, const flow::Array2D& p, double mu,
+                                   double rho, double rs, double z_bottom, double z_top) {
+  auto face = [](double x, double x0, double d, const char* what) {
+    const double q = (x - x0) / d;
+    const long k = std::lround(q);
+    if (std::abs(q - static_cast<double>(k)) > 1e-9) {
+      throw std::invalid_argument(std::string("control surface is not on a grid face: ") + what);
+    }
+    return static_cast<int>(k);
+  };
+  const int is = face(rs, g.r0, g.dr, "r");
+  const int jb = face(z_bottom, g.z0, g.dz, "z bottom");
+  const int jt = face(z_top, g.z0, g.dz, "z top");
+  if (is < 1 || is > g.nr - 1 || jb < 1 || jt > g.nz - 1 || jb >= jt) {
+    throw std::invalid_argument("control surface must lie strictly inside the grid");
+  }
+  double f = 0.0;
+  // 윗면 (n_z = +1), 아랫면 (n_z = −1): sgn · (−p + τ_zz − ρ w²) · r dr
+  for (int i = 0; i < is; ++i) {
+    for (int sgn : {+1, -1}) {
+      const int j = sgn > 0 ? jt : jb;
+      const double pf = 0.5 * (p(i, j - 1) + p(i, j));
+      const double tzz = 2.0 * mu * (w(i, j + 1) - w(i, j - 1)) / (2.0 * g.dz);
+      f += sgn * (-pf + tzz - rho * w(i, j) * w(i, j)) * g.metric(g.rc(i)) * g.dr;
+    }
+  }
+  // 옆면 (n_r = +1): τ_rz − ρ u_z u_r, r 면 위치, 셀 중심 높이
+  for (int j = jb; j < jt; ++j) {
+    const double dudz = (u(is, j + 1) - u(is, j - 1)) / (2.0 * g.dz);
+    const double dwdr =
+        0.5 * ((w(is, j) - w(is - 1, j)) + (w(is, j + 1) - w(is - 1, j + 1))) / g.dr;
+    const double wc = 0.25 * (w(is - 1, j) + w(is, j) + w(is - 1, j + 1) + w(is, j + 1));
+    f += (mu * (dudz + dwdr) - rho * wc * u(is, j)) * g.metric(g.rf(is)) * g.dz;
   }
   return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
 }
