@@ -533,10 +533,15 @@ TestReport run_2d(bool quick) {
       interface::TwoPhaseSolver s(pb, mat, f0);
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       const double v0 = s.vof().water_volume();
-      const double dt = 0.1 * g.dr / std::sqrt(kG * a);
+      // 적응 시간 간격: 고정 간격은 퍼지는 앞머리 속도를 따라가지 못해 VOF CFL 한계(0.5)를 넘었다
+      // (2026-10-22 워크스테이션 1차 실행). 한 단계에 최대 1/4 칸만 움직이도록 줄인다.
+      const double dt_max = 0.1 * g.dr / std::sqrt(kG * a);
       std::string hist;
-      double next = 0.0, vol = 0.0;
+      double next = 0.0, vol = 0.0, dt_min = dt_max;
       while (s.time() < t_star_end * t_scale) {
+        const double vmax = max_speed(s.flow());
+        const double dt = vmax > 0.0 ? std::min(dt_max, 0.25 * std::min(g.dr, g.dz) / vmax) : dt_max;
+        dt_min = std::min(dt_min, dt);
         s.step(dt);
         vol = std::max(vol, std::abs(s.vof().water_volume() - v0) / v0);
         if (s.time() >= next * t_scale) {
@@ -552,6 +557,8 @@ TestReport run_2d(bool quick) {
       if (s.time() < t_star_end * t_scale - 1e-12 && run.failure.empty()) run.failure = "FAILED_UNSTABLE";
       run.metrics["volume_relative_change"] = vol;
       run.metrics["end_time_over_scale"] = s.time() / t_scale;
+      run.metrics["smallest_dt_over_initial"] = dt_min / dt_max;
+      run.metrics["max_speed_at_end"] = max_speed(s.flow());
       rep.notes.push_back("a/dx=" + std::to_string(n) + " front r/a at t sqrt(g/a): " + hist);
       run.seconds = seconds_since(t0);
     } catch (const std::exception& e) {
@@ -560,6 +567,7 @@ TestReport run_2d(bool quick) {
     rep.runs.push_back(run);
   }
   rep.notes.push_back("report only (03 section 1.3): Martin & Moyce [R-17] data not verified, not a criterion");
+  rep.notes.push_back("adaptive dt = min(0.1 dx / sqrt(g a), 0.25 dx / max|u|)");
   // 판정 없음: 실행 실패만 드러낸다
   rep.verdict = "REPORT_ONLY";
   for (const auto& r : rep.runs) {
