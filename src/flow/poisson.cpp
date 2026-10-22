@@ -113,6 +113,11 @@ SolveResult pcg(const CsrMatrix& a, const IncompleteCholesky& m, const std::vect
   m.apply(r, z);
   p = z;
   double rz = dot(r, z);
+  // 정체 감지: 최근 kStall 회 동안 최저 잔차가 개선되지 않으면 반올림 한계에
+  // 도달한 것으로 보고 멈춘다 (허용치 미달 → converged = false).
+  constexpr int kStall = 500;
+  double best = r_norm;
+  int best_it = 0;
 
   for (int it = 1; it <= max_iterations; ++it) {
     a.multiply(p, q);
@@ -132,6 +137,12 @@ SolveResult pcg(const CsrMatrix& a, const IncompleteCholesky& m, const std::vect
         result.converged = true;
         break;
       }
+    }
+    if (r_norm < 0.999 * best) {
+      best = r_norm;
+      best_it = it;
+    } else if (it - best_it >= kStall) {
+      break;
     }
     m.apply(r, z);
     const double rz_new = dot(r, z);
