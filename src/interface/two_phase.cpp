@@ -8,21 +8,23 @@ flow::Problem TwoPhaseSolver::with_material(flow::Problem p, std::shared_ptr<Vof
 }
 
 TwoPhaseSolver::TwoPhaseSolver(flow::Problem problem, std::shared_ptr<VofMaterial> material,
-                               const flow::Array2D& f0, flow::SolverOptions options)
+                               const flow::Array2D& f0, bool implicit,
+                               flow::SolverOptions options)
     : mat_((material->set(fractions_from_vof(problem.grid, f0), 0.0,
                           fractions_from_vof(problem.grid, f0), 0.0),
             material)),
       solver_(with_material(std::move(problem), material), options),
-      vof_(solver_.grid()) {
+      vof_(solver_.grid()),
+      implicit_(implicit) {
   vof_.f() = f0;
 }
 
 void TwoPhaseSolver::initialize(double t0, const std::function<double(double, double)>& u0,
-                                const std::function<double(double, double)>& w0) {
+                                const std::function<double(double, double)>& w0, bool project) {
   const Fractions fr = fractions_from_vof(solver_.grid(), vof_.f());
   mat_->set(fr, t0, fr, t0);
   solver_.material_changed();
-  solver_.initialize(t0, u0, w0);
+  solver_.initialize(t0, u0, w0, project);
 }
 
 void TwoPhaseSolver::face_fluxes(const flow::Array2D& u, const flow::Array2D& w, flow::Array2D& qu,
@@ -54,7 +56,11 @@ void TwoPhaseSolver::step(double dt) {
   const Fractions fr0 = fractions_from_vof(solver_.grid(), f0);
   mat_->set(fr0, t, fractions_from_vof(solver_.grid(), vof_.f()), t + dt);
   solver_.material_changed();
-  solver_.step(dt);
+  if (implicit_) {
+    solver_.step_implicit(dt);
+  } else {
+    solver_.step(dt);
+  }
   // 3) 수정
   flow::Array2D um = solver_.u(), wm = solver_.w();
   for (std::size_t k = 0; k < um.data().size(); ++k) um.data()[k] = 0.5 * (um.data()[k] + u0.data()[k]);

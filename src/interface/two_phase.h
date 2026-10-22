@@ -20,11 +20,14 @@ namespace hcw::interface {
 class TwoPhaseSolver {
  public:
   // problem.material 은 쓰지 않고 material 로 바꾼다. f0: 초기 물 체적분율.
+  // implicit = true 이면 유동 단계에 step_implicit (점성 암시, 증분 압력; 압축성 공기에 필요),
+  // false 이면 P1 의 3단 RK (step).
   TwoPhaseSolver(flow::Problem problem, std::shared_ptr<VofMaterial> material,
-                 const flow::Array2D& f0, flow::SolverOptions options = {});
+                 const flow::Array2D& f0, bool implicit = false, flow::SolverOptions options = {});
 
+  // project = false 이면 초기 속도를 투영하지 않는다 (압축성 공기의 초기 압축 속도 등)
   void initialize(double t0, const std::function<double(double, double)>& u0,
-                  const std::function<double(double, double)>& w0);
+                  const std::function<double(double, double)>& w0, bool project = true);
   void step(double dt);
 
   double time() const { return solver_.time(); }
@@ -42,6 +45,7 @@ class TwoPhaseSolver {
   std::shared_ptr<VofMaterial> mat_;
   flow::FlowSolver solver_;
   Vof vof_;
+  bool implicit_ = false;
   long steps_ = 0;
 };
 

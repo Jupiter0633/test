@@ -297,4 +297,276 @@ TestReport run_2c(bool quick) {
   return rep;
 }
 
+
+// ---------------------------------------------------------------- 공통 (2-A, 2-F, 2-D)
+namespace {
+
+constexpr double kRhoW = 1000.0, kRhoA = 1.2, kMuW = 1e-3, kMuA = 1.8e-5, kG = 9.81;
+
+// 셀마다 z < zs (수평 수면) 아래 물 비율
+Array2D flat_fraction(const Grid& g, double zs) {
+  Array2D f(g.nr, g.nz);
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((zs - g.zf(j)) / g.dz, 0.0, 1.0);
+  }
+  return f;
+}
+
+// 같은 문제를 비압축으로 풀어 얻은 이산 정수압 (평균 0)
+Array2D hydrostatic_pressure(const flow::Problem& pb, const Array2D& f) {
+  flow::Problem q = pb;
+  q.air_kappa = 0.0;
+  auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
+  interface::TwoPhaseSolver s(q, mat, f);
+  s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
+  Array2D p;
+  s.flow().compute_pressure(p);
+  return p;
+}
+
+double max_speed(const flow::FlowSolver& s) {
+  double m = 0.0;
+  for (double v : s.u().data()) m = std::max(m, std::abs(v));
+  for (double v : s.w().data()) m = std::max(m, std::abs(v));
+  return m;
+}
+
+bool runs_ok(const std::vector<GridRun>& runs) {
+  return std::all_of(runs.begin(), runs.end(), [](const GridRun& r) { return r.failure.empty(); });
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------- 2-A
+TestReport run_2a(bool quick) {
+  TestReport rep = p3_report("2-A", "Water-air rest state (interface inside a cell), 1000 steps");
+  const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{32, 64};
+  const int steps = quick ? 100 : 1000;
+  for (Geometry geom : {Geometry::Planar, Geometry::Axisymmetric}) {
+    for (int n : ns) {
+      for (bool compressible : {false, true}) {
+        GridRun run;
+        run.n = n;
+        run.label = std::string(geom == Geometry::Planar ? "planar" : "axisym") + " N=" + std::to_string(n) +
+                    (compressible ? " compressible air" : " incompressible air");
+        try {
+          const auto t0 = std::chrono::steady_clock::now();
+          flow::Problem pb;
+          pb.grid = Grid(geom, n, n, 0.0, 1.0, 0.0, 1.0);
+          pb.bc.r_min.kind = geom == Geometry::Axisymmetric ? flow::BoundaryKind::Axis : flow::BoundaryKind::Wall;
+          pb.gravity = {0.0, -kG};
+          const Array2D f0 = flat_fraction(pb.grid, 0.5 + 0.3 * pb.grid.dz);
+          Array2D p0;
+          if (compressible) {
+            p0 = hydrostatic_pressure(pb, f0);
+            for (double& v : p0.data()) v += 1e5;
+            pb.air_kappa = 1.4;
+          }
+          auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
+          interface::TwoPhaseSolver s(pb, mat, f0, compressible);
+          s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; },
+                       !compressible);
+          if (compressible) s.flow().set_pressure(p0);
+          const double v0 = s.vof().water_volume();
+          double umax = 0.0, vol = 0.0;
+          for (int k = 0; k < steps; ++k) {
+            s.step(1e-3);
+            umax = std::max(umax, max_speed(s.flow()));
+            vol = std::max(vol, std::abs(s.vof().water_volume() - v0) / v0);
+          }
+          run.metrics["max_speed_over_run"] = umax;
+          run.metrics["volume_relative_change"] = vol;
+          run.stats = s.flow().stats();
+          if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
+          run.seconds = seconds_since(t0);
+        } catch (const std::exception& e) {
+          run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+        }
+        rep.runs.push_back(run);
+      }
+    }
+  }
+  if (runs_ok(rep.runs)) {
+    rep.criteria.push_back(all_at_most(rep.runs, "max_speed_over_run", 1e-8));
+    rep.criteria.push_back(all_at_most(rep.runs, "volume_relative_change", 1e-12));
+  }
+  rep.notes.push_back("interface at z = 0.5 + 0.3 dx; incompressible runs use the 3-stage RK step, compressible "
+                      "runs (kappa = 1.4) the semi-implicit step started from the discrete hydrostatic pressure + 1e5 Pa");
+  conclude(rep, quick);
+  return rep;
+}
+
+// ---------------------------------------------------------------- 2-F
+TestReport run_2f(bool quick) {
+  TestReport rep = p3_report("2-F", "Air springs: water column between two closed air pockets");
+  const double la = 0.2, lw = 1.0, p0 = 1e5, v0 = 0.01;
+  const std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{8, 16, 32, 64};
+  std::vector<std::vector<GridRun>> groups;
+  for (double kappa : {1.4, 1.0}) {
+    const double omega = std::sqrt(kappa * p0 * (2.0 / la) / (kRhoW * lw));
+    const double period = 2.0 * kPi / omega;
+    const double dp_exact = kappa * p0 * (v0 / omega) / la;
+    std::vector<GridRun> runs;
+    for (int n : ns) {
+      GridRun run;
+      run.n = n;
+      run.label = "kappa=" + fmt(kappa) + " L_a/dz=" + std::to_string(n);
+      try {
+        const auto t0 = std::chrono::steady_clock::now();
+        const double dz = la / n;
+        flow::Problem pb;
+        pb.grid = Grid(Geometry::Planar, 2, static_cast<int>(std::lround((2 * la + lw) / dz)), 0.0, 0.1, 0.0,
+                       2 * la + lw);
+        pb.bc.r_min.kind = flow::BoundaryKind::Wall;
+        pb.air_kappa = kappa;
+        const Grid& g = pb.grid;
+        Array2D f0(g.nr, g.nz);
+        for (int i = 0; i < g.nr; ++i) {
+          for (int j = 0; j < g.nz; ++j) {
+            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dz, 0.0, 1.0);
+          }
+        }
+        auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
+        interface::TwoPhaseSolver s(pb, mat, f0, true);
+        auto w_init = [&](double, double z) {
+          if (z <= la) return v0 * z / la;
+          if (z >= la + lw) return v0 * (2 * la + lw - z) / la;
+          return v0;
+        };
+        s.initialize(0.0, [](double, double) { return 0.0; }, w_init, false);
+        s.flow().set_pressure(Array2D(g.nr, g.nz, p0));
+        const double vol0 = s.vof().water_volume();
+        // Δt ∝ Δ: 1 주기에 50·(L_a/Δz) 단계 (후방 오일러 감쇠가 격자와 함께 줄도록; §1.3 이 정하지 않아 여기서 정함)
+        const double dt = period / (50.0 * n);
+        auto pocket = [&]() {  // 아래 공기층 평균 압력 − p₀
+          double sp = 0.0, sv = 0.0;
+          for (int i = 0; i < g.nr; ++i) {
+            for (int j = 0; j < g.nz && g.zf(j + 1) <= la + 1e-12; ++j) {
+              sp += s.flow().pressure()(i, j) * g.cell_volume(i);
+              sv += g.cell_volume(i);
+            }
+          }
+          return sp / sv - p0;
+        };
+        std::vector<double> crossings;
+        double prev = 0.0, amp = 0.0, vol = 0.0;
+        bool first = true;
+        while (s.time() < 3.25 * period) {
+          s.step(dt);
+          const double pp = pocket();
+          if (s.time() <= period) amp = std::max(amp, std::abs(pp));
+          if (!first && (prev > 0.0) != (pp > 0.0)) crossings.push_back(s.time() - dt * pp / (pp - prev));
+          prev = pp;
+          first = false;
+          vol = std::max(vol, std::abs(s.vof().water_volume() - vol0) / vol0);
+          if (s.flow().stats().solver_failed) break;
+        }
+        run.stats = s.flow().stats();
+        if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
+        if (crossings.size() < 2) throw std::runtime_error("fewer than two zero crossings");
+        const double om = 2.0 * kPi / (2.0 * (crossings.back() - crossings.front()) / (crossings.size() - 1));
+        run.metrics["frequency"] = om;
+        run.metrics["frequency_exact"] = omega;
+        run.metrics["frequency_relative_error"] = std::abs(om - omega) / omega;
+        run.metrics["pressure_amplitude"] = amp;
+        run.metrics["pressure_amplitude_exact"] = dp_exact;
+        run.metrics["pressure_amplitude_relative_error"] = std::abs(amp - dp_exact) / dp_exact;
+        run.metrics["volume_relative_change"] = vol;
+        run.seconds = seconds_since(t0);
+      } catch (const std::exception& e) {
+        run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+      }
+      runs.push_back(run);
+    }
+    if (runs_ok(runs)) {
+      const std::string tag = "kappa=" + fmt(kappa) + ": ";
+      auto add = [&](Criterion c) {
+        c.text = tag + c.text;
+        rep.criteria.push_back(c);
+      };
+      add(monotone(runs, "frequency_relative_error"));
+      Criterion fine;
+      fine.text = "frequency_relative_error on the finest grid <= 0.005";
+      fine.passed = runs.back().metrics.at("frequency_relative_error") <= 0.005;
+      fine.detail = fmt(runs.back().metrics.at("frequency_relative_error"));
+      add(fine);
+      add(order_at_least(runs, "frequency_relative_error", 0.8));
+      Criterion pa;
+      pa.text = "pressure_amplitude_relative_error on the finest grid <= 0.01";
+      pa.passed = runs.back().metrics.at("pressure_amplitude_relative_error") <= 0.01;
+      pa.detail = fmt(runs.back().metrics.at("pressure_amplitude_relative_error"));
+      add(pa);
+      add(all_at_most(runs, "volume_relative_change", 1e-8));
+    }
+    rep.runs.insert(rep.runs.end(), runs.begin(), runs.end());
+    rep.notes.push_back("kappa=" + fmt(kappa) + ": exact omega = " + fmt(omega) + " rad/s, pressure amplitude " +
+                        fmt(dp_exact) + " Pa (derived, 03 section 1.3)");
+  }
+  rep.notes.push_back("planar tube 0.1 m wide (2 cells), no gravity, inviscid; semi-implicit step (backward Euler, "
+                      "incremental pressure) with dt = period / (50 L_a/dz); pressure = bottom pocket mean");
+  conclude(rep, quick);
+  return rep;
+}
+
+// ---------------------------------------------------------------- 2-D (보고만)
+TestReport run_2d(bool quick) {
+  TestReport rep = p3_report("2-D", "Axisymmetric water column collapse (report only)");
+  const double a = 0.05;  // 기둥 반지름, 높이 2a
+  const std::vector<int> ns = quick ? std::vector<int>{8} : std::vector<int>{16, 32};
+  const double t_star_end = 3.0, t_scale = std::sqrt(a / kG);
+  for (int n : ns) {
+    GridRun run;
+    run.n = n;
+    run.label = "a/dx=" + std::to_string(n);
+    try {
+      const auto t0 = std::chrono::steady_clock::now();
+      flow::Problem pb;
+      pb.grid = Grid(Geometry::Axisymmetric, 5 * n, 3 * n, 0.0, 5 * a, 0.0, 3 * a);
+      pb.bc.r_min.kind = flow::BoundaryKind::Axis;
+      pb.gravity = {0.0, -kG};
+      const Grid& g = pb.grid;
+      Array2D f0(g.nr, g.nz);
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = 0; j < g.nz; ++j) f0(i, j) = (g.rc(i) < a && g.zc(j) < 2 * a) ? 1.0 : 0.0;
+      }
+      auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
+      interface::TwoPhaseSolver s(pb, mat, f0);
+      s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
+      const double v0 = s.vof().water_volume();
+      const double dt = 0.1 * g.dr / std::sqrt(kG * a);
+      std::string hist;
+      double next = 0.0, vol = 0.0;
+      while (s.time() < t_star_end * t_scale) {
+        s.step(dt);
+        vol = std::max(vol, std::abs(s.vof().water_volume() - v0) / v0);
+        if (s.time() >= next * t_scale) {
+          double front = 0.0;  // 바닥 행에서 물이 닿은 반경 (물 비율 합 × Δr)
+          for (int i = 0; i < g.nr; ++i) front += s.vof().f()(i, 0) * g.dr;
+          hist += (hist.empty() ? "" : ", ") + fmt(s.time() / t_scale) + ":" + fmt(front / a);
+          next += 0.5;
+        }
+        if (s.flow().stats().solver_failed || max_speed(s.flow()) > 50.0) break;
+      }
+      run.stats = s.flow().stats();
+      if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
+      if (s.time() < t_star_end * t_scale - 1e-12 && run.failure.empty()) run.failure = "FAILED_UNSTABLE";
+      run.metrics["volume_relative_change"] = vol;
+      run.metrics["end_time_over_scale"] = s.time() / t_scale;
+      rep.notes.push_back("a/dx=" + std::to_string(n) + " front r/a at t sqrt(g/a): " + hist);
+      run.seconds = seconds_since(t0);
+    } catch (const std::exception& e) {
+      run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+    }
+    rep.runs.push_back(run);
+  }
+  rep.notes.push_back("report only (03 section 1.3): Martin & Moyce [R-17] data not verified, not a criterion");
+  // 판정 없음: 실행 실패만 드러낸다
+  rep.verdict = "REPORT_ONLY";
+  for (const auto& r : rep.runs) {
+    if (!r.failure.empty()) rep.verdict = "REPORT_ONLY (" + r.failure.substr(0, r.failure.find(' ')) + ")";
+  }
+  if (quick) rep.verdict = "QUICK_CHECK_ONLY";
+  return rep;
+}
+
 }  // namespace hcw::verify
