@@ -62,7 +62,7 @@ out\build\windows-x64-release\hcw_verify.exe all
 |---|---|---|
 | 설계 | 완료 | `docs/design/` 01–06 |
 | P0 (빌드 틀, 입력 검사, 잠금, 실행 기록) | **완료** — Linux·Windows 노트북 모두 시험 18/18 통과 | `validation/records/P0-exit-2026-10-21.md` |
-| P1 (단상·변수밀도 유동, 압력 해법) | **구현 완료 (커밋 f330e84), 판정 대기** | 기준 고정 커밋 `35a77ac`, `03_verification_plan.md` §1.1 |
+| P1 (단상·변수밀도 유동, 압력 해법) | **완료 (2026-10-22)** — 첫 실행 1-A(a) `FAILED_SOLVER` → 압력 해법 수정(13a2777) 후 노트북에서 1-A~1-D 모두 `VERIFIED` | `validation/records/P1-1A-a-FAILED_SOLVER-2026-10-22.md`, `P1-exit-2026-10-22.md` |
 | P2 이후 | 미착수 | `04_development_phases.md` |
 
 ### P1 세부 상태
