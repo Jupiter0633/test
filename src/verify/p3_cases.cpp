@@ -252,20 +252,23 @@ TestReport run_2c(bool quick) {
       };
       std::vector<double> crossings;
       double prev = eta(), vol_change = 0.0, amp_last = 0.0;
-      const double t_end = 3.25 * period;
-      while (s.time() < t_end) {
+      // §1.3: "3 주기 동안" 측정 → 0 교차 7 개 (반주기 6 개 = 정확히 3 주기)까지 진행한다.
+      // 위·아래 반주기 길이가 진폭에 비례해 조금 달라서(약 ±0.4 %), 홀수 개의 반주기로 평균하면
+      // 한 반주기 몫이 남아 진동수가 치우친다 (1차 정식 실행에서 3.25 주기로 끊어 일부 격자가
+      // 2.5 주기만 재어 생긴 불통과, 2026-10-23 확인). 안전 상한은 4 주기.
+      while (crossings.size() < 7 && s.time() < 4.0 * period) {
         s.step(dt);
         const double e = eta();
         if ((prev > 0.0) != (e > 0.0)) crossings.push_back(s.time() - dt * e / (e - prev));
-        if (s.time() > t_end - period) amp_last = std::max(amp_last, std::abs(e));
+        if (crossings.size() >= 5) amp_last = std::max(amp_last, std::abs(e));  // 마지막 한 주기
         prev = e;
         vol_change = std::max(vol_change, std::abs(s.vof().water_volume() - v0) / v0);
         if (s.flow().stats().solver_failed) break;
       }
       run.stats = s.flow().stats();
       if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
-      if (crossings.size() < 2) throw std::runtime_error("fewer than two zero crossings");
-      const double t_meas = 2.0 * (crossings.back() - crossings.front()) / (crossings.size() - 1);
+      if (crossings.size() < 7) throw std::runtime_error("fewer than seven zero crossings in 4 periods");
+      const double t_meas = (crossings[6] - crossings[0]) / 3.0;
       const double omega = 2.0 * kPi / t_meas;
       run.metrics["frequency"] = omega;
       run.metrics["frequency_exact"] = sigma;
@@ -292,7 +295,7 @@ TestReport run_2c(bool quick) {
   rep.notes.push_back("exact sigma = " + fmt(sigma) + " rad/s (Lamb 1932 Art. 231 eq. 11 with k R = " +
                       fmt(k * R) + " from Art. 191; the combination is derived in 03 section 1.3)");
   rep.notes.push_back("inviscid, incompressible air; eps = 0.002 m; dt = 0.25 dx / sqrt(g h); frequency from "
-                      "zero crossings of the water height in the axis column over 3 periods; amplitude is report only");
+                      "7 zero crossings (exactly 3 periods) of the water height in the axis column; amplitude (last period) is report only");
   conclude(rep, quick);
   return rep;
 }
@@ -451,7 +454,8 @@ TestReport run_2f(bool quick) {
         std::vector<double> crossings;
         double prev = 0.0, amp = 0.0, vol = 0.0;
         bool first = true;
-        while (s.time() < 3.25 * period) {
+        // 2-C 와 같이 0 교차 7 개 (정확히 3 주기) 까지 진행한다. 안전 상한 4.5 주기.
+        while (crossings.size() < 7 && s.time() < 4.5 * period) {
           s.step(dt);
           const double pp = pocket();
           if (s.time() <= period) amp = std::max(amp, std::abs(pp));
@@ -463,8 +467,8 @@ TestReport run_2f(bool quick) {
         }
         run.stats = s.flow().stats();
         if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
-        if (crossings.size() < 2) throw std::runtime_error("fewer than two zero crossings");
-        const double om = 2.0 * kPi / (2.0 * (crossings.back() - crossings.front()) / (crossings.size() - 1));
+        if (crossings.size() < 7) throw std::runtime_error("fewer than seven zero crossings in 4.5 periods");
+        const double om = 2.0 * kPi / ((crossings[6] - crossings[0]) / 3.0);
         run.metrics["frequency"] = om;
         run.metrics["frequency_exact"] = omega;
         run.metrics["frequency_relative_error"] = std::abs(om - omega) / omega;
