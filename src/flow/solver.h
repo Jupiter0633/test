@@ -26,6 +26,9 @@ struct BodyMotion {
 struct Body {
   std::shared_ptr<const body::Shape> shape;
   BodyMotion motion;
+  // step_implicit 의 경계 보간 차수 (body::momentum_classes 참조). 2: 정상 계산(벽 견인력 2차),
+  // 1: 움직이는 물체·작은 점성의 비정상 계산 (2차는 불안정함을 확인)
+  int interpolation_order = 2;
   bool moving() const { return static_cast<bool>(motion.z) || static_cast<bool>(motion.w); }
   double z(double t) const { return motion.z ? motion.z(t) : 0.0; }
   double w(double t) const { return motion.w ? motion.w(t) : 0.0; }

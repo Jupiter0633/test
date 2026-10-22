@@ -45,7 +45,9 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double z_cente
 //   u_f = w_b u_b + w1 u_o1 + w2 u_o2  (d: 면에서 경계까지 거리, h: 격자 간격)
 //   w_b = 2h²/((d+h)(d+2h)), w1 = 2d/(d+h), w2 = −d/(d+2h).
 //   o2 가 없거나 고체면 1차 (직선) 보간 w1 = d/(d+h), w2 = 0.
-// 벽 근처 속도가 3차, 벽 기울기(점성 견인력)가 2차 정확도가 되도록 2차 보간을 쓴다.
+// 2차 보간은 벽 근처 속도 3차, 벽 기울기(점성 견인력) 2차 정확도를 준다 (1-G 정상 Stokes 유동).
+// 다만 음의 가중치(w2) 때문에, 물체가 움직이고 점성이 작은 비정상 계산(1-E(b), μ = 0.01)에서
+// 불안정해짐을 확인했다 (2026-10-22, 속도가 지수적으로 커짐; 1차 보간은 안정). 그래서 차수를 고를 수 있게 한다.
 struct FaceForcing {
   int comp = 0;    // 0: r 면(u), 1: z 면(w)
   int i = 0, j = 0;
@@ -61,6 +63,7 @@ struct MomentumClasses {
   std::vector<FaceForcing> forcing;
 };
 
-MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double z_center);
+// order: 경계 보간 차수 (1: 직선, 2: 2차)
+MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double z_center, int order = 2);
 
 }  // namespace hcw::body

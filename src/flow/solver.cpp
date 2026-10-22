@@ -627,7 +627,7 @@ void FlowSolver::step_implicit(double dt) {
   body::MomentumClasses mc;
   double ub_w = 0.0;
   if (p_.body) {
-    mc = body::momentum_classes(g, *p_.body->shape, p_.body->z(t1));
+    mc = body::momentum_classes(g, *p_.body->shape, p_.body->z(t1), p_.body->interpolation_order);
     ub_w = p_.body->w(t1);
   }
   // 행 종류: 0 유체(운동량), 1 고정값, 2 경계 보간
@@ -663,6 +663,58 @@ void FlowSolver::step_implicit(double dt) {
     if (kind[k] != 0) continue;  // 바깥 경계 면은 그대로
     kind[k] = 2;
     forcing[k] = &f;
+  }
+
+  // 운동량이 값을 정한 면(고체 면·경계 보간면)은 투영이 고치지 않고 알려진 플럭스로 둔다.
+  // 그렇지 않으면 투영과 운동량이 같은 면을 번갈아 고쳐 정상 상태에 닿지 못한다.
+  // 열린 면이 하나도 고칠 수 없는 셀은 압력 미지수에서 빠진다 (발산은 그 셀에 남는다).
+  if (p_.body) {
+    update_geometry(t1);
+    const std::vector<char> was_active = pgeom_.active;
+    pgeom_ = geom_;
+    for (int i = iu_lo_; i < iu_hi_; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = jw_lo_; j < jw_hi_; ++j) {
+        if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] != 0) pgeom_.open_w(i, j) = 0.0;
+      }
+    }
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        const bool west = !(g.geometry == Geometry::Axisymmetric && i == 0) && pgeom_.open_u(i, j) > 0.0;
+        const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
+                         pgeom_.open_w(i, j + 1) > 0.0;
+        pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
+      }
+    }
+    if (!pgeom_.active.back()) {
+      throw std::invalid_argument("the last cell (pressure reference) must be in the fluid");
+    }
+    // 물체가 움직여 새로 압력 미지수가 된 셀: 이전 압력이 없으므로(0) 그대로 두면 예측 단계의
+    // 압력 기울기가 터진다. 이전에 유효했던 이웃 셀의 평균으로 채운다.
+    if (was_active.size() == pgeom_.active.size()) {
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = 0; j < nz; ++j) {
+          const std::size_t k = static_cast<std::size_t>(i) * nz + j;
+          if (!pgeom_.active[k] || was_active[k]) continue;
+          double sum = 0.0;
+          int count = 0;
+          for (int di = -1; di <= 1; ++di) {
+            for (int dj = -1; dj <= 1; ++dj) {
+              const int ii = i + di, jj = j + dj;
+              if (ii < 0 || jj < 0 || ii >= g.nr || jj >= nz) continue;
+              if (!was_active[static_cast<std::size_t>(ii) * nz + jj]) continue;
+              sum += p_inc_(ii, jj);
+              ++count;
+            }
+          }
+          if (count > 0) p_inc_(i, j) = sum / count;
+        }
+      }
+    }
   }
 
   // 행렬과 우변
@@ -751,31 +803,7 @@ void FlowSolver::step_implicit(double dt) {
   if (!p_.body) {
     project(un, wn, t1, t1, phi_[0]);
   } else {
-    // 운동량이 값을 정한 면(고체 면·경계 보간면)은 투영이 고치지 않고 알려진 플럭스로 둔다.
-    // 그렇지 않으면 투영과 운동량이 같은 면을 번갈아 고쳐 정상 상태에 닿지 못한다.
-    // 열린 면이 하나도 고칠 수 없는 셀은 압력 미지수에서 빠진다 (발산은 그 셀에 남는다).
-    pgeom_ = geom_;
-    for (int i = iu_lo_; i < iu_hi_; ++i) {
-      for (int j = 0; j < nz; ++j) {
-        if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
-      }
-    }
-    for (int i = 0; i < g.nr; ++i) {
-      for (int j = jw_lo_; j < jw_hi_; ++j) {
-        if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] != 0) pgeom_.open_w(i, j) = 0.0;
-      }
-    }
-    for (int i = 0; i < g.nr; ++i) {
-      for (int j = 0; j < nz; ++j) {
-        const bool west = !(g.geometry == Geometry::Axisymmetric && i == 0) && pgeom_.open_u(i, j) > 0.0;
-        const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
-                         pgeom_.open_w(i, j + 1) > 0.0;
-        pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
-      }
-    }
-    if (!pgeom_.active.back()) {
-      throw std::invalid_argument("the last cell (pressure reference) must be in the fluid");
-    }
+    // 압력 기하 pgeom_ 는 운동량 조립 전에 만들었다
     if (!op_mom_.valid || p_.body->moving() || p_.material->time_dependent()) {
       build_operator(m, op_mom_, pgeom_);
       op_mom_.valid = true;

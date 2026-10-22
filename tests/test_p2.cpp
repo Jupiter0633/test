@@ -268,6 +268,43 @@ void test_implicit_matches_explicit() {
   expect(!im.stats().solver_failed && !ex.stats().solver_failed, "solvers converged in both runs");
 }
 
+// 회귀 시험: 움직이는 구(저점성)가 격자 몇 칸을 지나는 동안 속도가 유한하게 머문다
+// (2026-10-22: 2차 경계 보간에서 지수적으로 커졌음 → 이 계산은 1차 보간을 쓴다)
+void test_moving_body_stable() {
+  const int n = 8;
+  auto pot = std::make_shared<verify::SpheroidPotential>(1.0, 1.0);
+  auto b = std::make_shared<flow::Body>();
+  b->shape = std::make_shared<body::Spheroid>(1.0, 1.0);
+  b->motion.z = [](double t) { return 0.5 * t * t; };
+  b->motion.w = [](double t) { return t; };
+  b->motion.a = [](double) { return 1.0; };
+  b->interpolation_order = 1;
+  flow::Problem pb;
+  pb.grid = Grid(Geometry::Axisymmetric, 3 * n, 6 * n, 0.0, 3.0, -3.0, 3.0);
+  pb.body = b;
+  pb.bc.r_min.kind = flow::BoundaryKind::Axis;
+  flow::WallVelocity v = [pot](double r, double z, double t) {
+    const auto e = pot->velocity(r, z - 0.5 * t * t);
+    return std::array<double, 2>{t * e[0], t * e[1]};
+  };
+  pb.bc.r_max.velocity = pb.bc.z_min.velocity = pb.bc.z_max.velocity = v;
+  pb.material = std::make_shared<flow::SmoothMaterial>(
+      [](double, double, double) { return 1.0; }, [](double, double, double) { return 0.01; }, false);
+  flow::FlowSolver s(pb);
+  s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
+  const double dx = 1.0 / n, t_end = std::sqrt(6.0 * dx);
+  double worst = 0.0;
+  while (s.time() < t_end - 1e-12) {
+    s.step_implicit(std::min(0.05 * dx, t_end - s.time()));
+    double umax = 0.0;
+    for (double x : s.w().data()) umax = std::max(umax, std::abs(x));
+    worst = std::max(worst, umax / std::max(s.time(), 1e-12));  // 물체 속도 = t
+  }
+  expect(std::isfinite(worst) && worst < 3.0, "moving sphere stays bounded (max |w| / body speed = " +
+                                                  std::to_string(worst) + ")");
+  expect(!s.stats().solver_failed, "moving sphere: solvers converged");
+}
+
 }  // namespace
 
 int main() {
@@ -277,6 +314,7 @@ int main() {
   test_body_pressure();
   test_stokes_exact();
   test_implicit_matches_explicit();
+  test_moving_body_stable();
   std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   return g_failures == 0 ? 0 : 1;
 }

@@ -126,7 +126,7 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double zc) {
   return c;
 }
 
-MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double zc) {
+MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double zc, int order) {
   MomentumClasses m;
   const int nz = g.nz;
   m.solid_u.assign(static_cast<std::size_t>(g.nr + 1) * nz, 0);
@@ -195,7 +195,7 @@ MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double
         f.oi2 = oi + (oi - i);
         f.oj2 = oj + (oj - j);
         const double d = best;
-        if (usable(oi, oj) && usable(f.oi2, f.oj2)) {
+        if (order >= 2 && usable(oi, oj) && usable(f.oi2, f.oj2)) {
           f.weight = 2.0 * d / (d + h);
           f.weight2 = -d / (d + 2.0 * h);
         } else if (usable(oi, oj)) {

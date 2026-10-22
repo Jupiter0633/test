@@ -170,10 +170,85 @@ TestReport run_1e(bool quick) {
       run.metrics["force_relative_error"] = std::abs(f - exact) / std::abs(exact);
     }));
   }
-  if (all_ok(rep.runs)) add_star_criteria(rep, rep.runs);
-  rep.notes.push_back("exact force = -(2/3) pi rho a^3 A (Lamb 1932 Art. 92); outer boundary = exact dipole flow");
-  rep.notes.push_back("1-E(b) (force history while moving, report only) is pending near-body momentum");
-  conclude(rep, quick);
+  std::vector<GridRun> runs_a = rep.runs;
+
+  // (b) 보고만: 물체가 격자 3칸을 지나는 동안의 힘 이력 (점성 작게, 반암시적 진행).
+  // §1.2 는 격자·시간을 정하지 않았으므로 여기서 정한다: a/Δ = 8, 16, 32, μ = 0.01, Δt = 0.05 Δ.
+  const double mu_b = 0.01;
+  const std::vector<int> nb = quick ? std::vector<int>{4} : std::vector<int>{8, 16, 32};
+  std::vector<GridRun> runs_b;
+  for (int n : nb) {
+    runs_b.push_back(guarded("(b) moving, a/dx=" + std::to_string(n), n, [&](GridRun& run) {
+      const auto t0 = std::chrono::steady_clock::now();
+      const double dx = a / n;
+      const double t_end = std::sqrt(2.0 * 3.0 * dx / A);  // 중심이 3칸 이동
+      const double dt = 0.05 * dx;
+      auto shape = std::make_shared<body::Spheroid>(a, a);
+      auto b = std::make_shared<flow::Body>();
+      b->shape = shape;
+      b->motion.z = [A](double t) { return 0.5 * A * t * t; };
+      b->motion.w = [A](double t) { return A * t; };
+      b->motion.a = [A](double) { return A; };
+      b->interpolation_order = 1;  // 2차 보간은 이 비정상·저점성 계산에서 불안정 (body/cut_cell.h)
+      Problem pb;
+      pb.grid = axisym_grid(3 * n, 6 * n, 3.0, -3.0, 3.0);
+      pb.body = b;
+      pb.bc.r_min.kind = BoundaryKind::Axis;
+      flow::WallVelocity v = [pot, A](double r, double z, double t) {
+        const auto e = pot->velocity(r, z - 0.5 * A * t * t);
+        return std::array<double, 2>{A * t * e[0], A * t * e[1]};
+      };
+      pb.bc.r_max.velocity = pb.bc.z_min.velocity = pb.bc.z_max.velocity = v;
+      pb.material = std::make_shared<flow::SmoothMaterial>(
+          [rho](double, double, double) { return rho; }, [mu_b](double, double, double) { return mu_b; },
+          false);
+      FlowSolver s(pb);
+      s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
+      std::vector<double> ratio;
+      while (s.time() < t_end - 1e-12) {
+        s.step_implicit(std::min(dt, t_end - s.time()));
+        const double zc = b->z(s.time());
+        const double fp = body::axial_pressure_force(s.grid(), s.pressure_geometry(), s.pressure());
+        const double fv = body::axial_viscous_force(s.grid(), s.geometry(), *shape, zc, s.w(), mu_b, b->w(s.time()));
+        ratio.push_back((fp + fv) / exact);
+        if (s.stats().solver_failed) break;
+      }
+      run.seconds = seconds_since(t0);
+      finish_run(run, s);
+      double mean = 0.0, jump = 0.0;
+      for (std::size_t k = 0; k < ratio.size(); ++k) {
+        mean += ratio[k] / static_cast<double>(ratio.size());
+        if (k > 0) jump = std::max(jump, std::abs(ratio[k] - ratio[k - 1]));
+      }
+      run.metrics["force_over_added_mass_mean"] = mean;
+      run.metrics["force_over_added_mass_first"] = ratio.empty() ? 0.0 : ratio.front();
+      run.metrics["force_over_added_mass_last"] = ratio.empty() ? 0.0 : ratio.back();
+      run.metrics["max_step_jump_over_added_mass"] = jump;
+      run.metrics["steps"] = static_cast<double>(ratio.size());
+      std::string hist;
+      const std::size_t stride = std::max<std::size_t>(1, ratio.size() / 10);
+      for (std::size_t k = 0; k < ratio.size(); k += stride) hist += (k ? ", " : "") + fmt(ratio[k]);
+      rep.notes.push_back("(b) a/dx=" + std::to_string(n) + " F/(-m_a A) every " + std::to_string(stride) +
+                          " steps: " + hist);
+    }));
+  }
+
+  rep.runs = runs_a;
+  rep.runs.insert(rep.runs.end(), runs_b.begin(), runs_b.end());
+  if (all_ok(runs_a)) add_star_criteria(rep, runs_a);
+  rep.notes.push_back("(a) exact force = -(2/3) pi rho a^3 A (Lamb 1932 Art. 92); outer boundary = exact dipole flow");
+  rep.notes.push_back("(b) report only: sphere moves 3 cells, mu = 0.01, dt = 0.05 dx, semi-implicit step, "
+                      "linear boundary interpolation (quadratic was unstable here); "
+                      "F includes pressure and viscous parts; max_step_jump measures fresh-cell spikes");
+  if (!all_ok(runs_b)) rep.notes.push_back("(b) a report-only run failed; see its label");
+  // 판정은 (a) 만으로 한다 (§1.2)
+  TestReport judge = rep;
+  judge.runs = runs_a;
+  conclude(judge, quick);
+  rep.verdict = judge.verdict;
+  for (const auto& n : judge.notes) {
+    if (n.find("quick mode") != std::string::npos) rep.notes.push_back(n);
+  }
   return rep;
 }
 

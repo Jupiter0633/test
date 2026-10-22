@@ -52,6 +52,9 @@ target_compile_definitions(hcw_core PRIVATE
   HCW_BUILD_CONFIG="$<CONFIG>"
   HCW_VERSION="${PROJECT_VERSION}")
 add_dependencies(hcw_core hcw_build_info)
+# 순서 의존만으로는 Ninja 가 헤더 내용이 바뀐 빌드에서 run_metadata 를 다시 컴파일하지 않을 수 있다
+# (2026-10-22 확인: 작업 트리가 바뀐 뒤 첫 빌드가 "clean" 으로 기록됨). 명시적 의존을 건다.
+set_source_files_properties(src/io/run_metadata.cpp PROPERTIES OBJECT_DEPENDS ${HCW_BUILD_INFO_HEADER})
 
 add_executable(hcw src/app/main.cpp)
 target_link_libraries(hcw PRIVATE hcw_core)
