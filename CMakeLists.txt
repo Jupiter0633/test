@@ -94,6 +94,10 @@ target_link_libraries(hcw_verify_cases PUBLIC hcw_flow)
 add_executable(hcw_verify src/app/verify_main.cpp)
 target_link_libraries(hcw_verify PRIVATE hcw_verify_cases hcw_core)
 
+# 개발용 실험 (판정 아님, 결과 파일 없음)
+add_executable(hcw_dev src/app/dev_main.cpp)
+target_link_libraries(hcw_dev PRIVATE hcw_verify_cases hcw_core)
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)

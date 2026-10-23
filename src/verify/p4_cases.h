@@ -17,6 +17,11 @@ TestReport run_3f(bool quick);
 TestReport run_3g(bool quick);
 TestReport run_3i(bool quick);
 
+// 개발용 (판정 아님, 결과 저장 안 함): 3-B 조건 원판 입수를 a/Δ = n, Δt 규칙 × dt_factor 로 계산한다.
+// 3-F 의 제어면 힘도 함께 구해 충격량·첨두값·두 힘의 차이와 시간 이력을 돌려준다 (verdict = DEV_ONLY).
+// 시간 간격 수렴 실험 (P4-analysis-2026-10-23.md) 용.
+TestReport entry_dev_study(int n, double dt_factor);
+
 // Celik 등의 GCI_fine (안전계수 1.25, 격자비 2). phi1: 가장 고운 격자, phi3: 가장 거친 격자.
 // 차이 비 R = (phi2 − phi1)/(phi3 − phi2) 가 0 < R < 1 이 아니면 false.
 // 관측 차수 p 는 [0.5, 3] 으로 자른다 (03 §1.4).

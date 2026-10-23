@@ -502,6 +502,40 @@ bool gci_fine(double phi1, double phi2, double phi3, double& gci, double& p) {
   return true;
 }
 
+// ---------------------------------------------------------------- 개발용
+TestReport entry_dev_study(int n, double dt_factor) {
+  TestReport rep = p4_report("dev-dt", "Disk entry time-step study (development only, not a verdict)");
+  EntrySetup es;
+  es.n = n;
+  es.dt_factor = dt_factor;
+  es.cv = true;
+  EntryOut o = run_entry(es);
+  o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
+  if (o.run.failure.empty()) {
+    double dmax = 0.0, fpeak = 0.0;
+    for (std::size_t k = 0; k < o.fs_half.size(); ++k) {
+      dmax = std::max(dmax, std::abs(o.fs_half[k] - o.fcv_half[k]));
+      fpeak = std::max(fpeak, std::abs(o.fs_half[k]));
+    }
+    o.run.metrics["max_force_difference_over_peak"] = fpeak > 0.0 ? dmax / fpeak : 0.0;
+    o.run.metrics["impulse_cv"] = o.impulse_cv;
+    o.run.metrics["impulse_difference_relative"] =
+        o.impulse != 0.0 ? std::abs(o.impulse - o.impulse_cv) / std::abs(o.impulse) : 0.0;
+    rep.notes.push_back("bottom area-averaged pressure (kPa): " + history(o, o.p_bottom, 1e-3));
+    rep.notes.push_back("pocket mean pressure (kPa): " + history(o, o.pocket_p, 1e-3));
+    rep.notes.push_back("force F_s (N): " + history(o, o.force, 1.0));
+    std::string hs;
+    const std::size_t stride = std::max<std::size_t>(1, o.fs_half.size() / 12);
+    for (std::size_t k = 0; k < o.fs_half.size(); k += stride) {
+      hs += (hs.empty() ? "" : ", ") + fmt(o.t[k + 1] * 1e3) + "ms:" + fmt(o.fs_half[k]) + "/" + fmt(o.fcv_half[k]);
+    }
+    rep.notes.push_back("F_s / F_cv (N) at half steps: " + hs);
+  }
+  rep.runs.push_back(o.run);
+  rep.verdict = o.run.failure.empty() ? "DEV_ONLY" : "DEV_ONLY (" + o.run.failure.substr(0, o.run.failure.find(' ')) + ")";
+  return rep;
+}
+
 // ---------------------------------------------------------------- 3-A
 TestReport run_3a(bool quick) {
   TestReport rep = p4_report("3-A", "Planar wedge entry at constant speed (report only)");
