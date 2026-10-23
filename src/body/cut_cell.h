@@ -38,6 +38,12 @@ CutGeometry open_geometry(const flow::Grid& g);
 // 중심 높이 z_center 에 놓인 형상의 컷셀 기하. 축대칭 격자는 r0 = 0 이어야 한다.
 CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double z_center);
 
+// 셀마다 유체가 차지하는 체적 비율 (0..1, 축대칭은 r 가중). P4: VOF 와 물체를 함께 쓸 때
+// 물 체적분율의 상한과 공기 체적(압축성) 계산에 쓴다. 수평선마다 고체 반경 R(z) 를 써서
+// ∫∫ r dr dz 를 z 방향 합성 가우스 적분 (형상의 위·아래 끝에서 구간을 나눔) 으로 구한다.
+// 원기둥·쐐기는 반올림 수준, 회전타원체는 끝의 제곱근 특이성 때문에 약 1e−6 정도.
+flow::Array2D fluid_fraction(const flow::Grid& g, const Shape& shape, double z_center);
+
 // 운동량(속도 면) 분류 — 점성 흐름의 no-slip 처리 (Fadlun 형 직접 강제, 2차 보간).
 // 고체 면: 면 중심이 물체 안 → 물체 속도.
 // 경계 보간면: 면 중심은 유체이고 같은 성분의 이웃 면(±r 또는 ±z)이 고체 →

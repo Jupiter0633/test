@@ -77,4 +77,50 @@ double Cylinder::distance(double r, double z) const {
   return std::hypot(std::max(dr, 0.0), std::max(dz, 0.0));
 }
 
+Wedge::Wedge(double a, double beta) : a_(a), beta_(beta), t_(std::tan(beta)), h_(a * std::tan(beta)) {
+  if (!(a > 0.0 && beta > 0.0 && beta < 1.5)) throw std::invalid_argument("wedge needs a > 0 and 0 < deadrise < 1.5 rad");
+}
+
+bool Wedge::inside(double r, double z) const {
+  return r >= 0.0 && r <= a_ && z <= 0.5 * h_ && z >= -0.5 * h_ + r * t_;
+}
+
+bool Wedge::z_extent(double r, double& lo, double& hi) const {
+  if (r > a_) return false;
+  lo = -0.5 * h_ + r * t_;
+  hi = 0.5 * h_;
+  return true;
+}
+
+bool Wedge::r_extent(double z, double& radius) const {
+  if (z < -0.5 * h_ || z > 0.5 * h_) return false;
+  radius = std::min(a_, (z + 0.5 * h_) / t_);
+  return true;
+}
+
+std::array<double, 2> Wedge::outward_normal(double r, double z) const {
+  // 비스듬한 아랫면과 윗면 중 가까운 면
+  const double c = std::cos(beta_), s = std::sin(beta_);
+  const double d_slant = std::abs((z + 0.5 * h_ - r * t_) * c);
+  const double d_top = std::abs(0.5 * h_ - z);
+  if (d_slant <= d_top) return {s, -c};
+  return {0.0, 1.0};
+}
+
+double Wedge::distance(double r, double z) const {
+  // 삼각형 (0, −h/2), (a, h/2), (0, h/2) 까지의 부호 거리 (r = 0 쪽 변은 대칭면이라 제외)
+  const double c = std::cos(beta_), s = std::sin(beta_);
+  const double d_slant = (r * t_ - (z + 0.5 * h_)) * c;  // 비스듬한 면 바깥 양수
+  const double d_top = z - 0.5 * h_;                       // 윗면 바깥 양수
+  if (inside(r, z)) return std::max(d_slant, d_top);
+  // 바깥: 두 변 선분까지의 거리 중 작은 값
+  auto seg = [](double px, double pz, double ax, double az, double bx, double bz) {
+    const double vx = bx - ax, vz = bz - az;
+    const double tt = std::clamp(((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz), 0.0, 1.0);
+    return std::hypot(px - (ax + tt * vx), pz - (az + tt * vz));
+  };
+  (void)s;
+  return std::min(seg(r, z, 0.0, -0.5 * h_, a_, 0.5 * h_), seg(r, z, 0.0, 0.5 * h_, a_, 0.5 * h_));
+}
+
 }  // namespace hcw::body

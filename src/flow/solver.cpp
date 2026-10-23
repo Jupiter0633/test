@@ -4,6 +4,7 @@
 #include <cmath>
 #include <array>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "common/parallel.h"
@@ -66,8 +67,9 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
     throw std::invalid_argument("axis boundary is only allowed at r_min");
   }
   const bool axisym = g.geometry == Geometry::Axisymmetric;
-  if (bc.r_min.kind == BoundaryKind::Axis && !(axisym && g.r0 == 0.0)) {
-    throw std::invalid_argument("axis boundary requires an axisymmetric grid starting at r = 0");
+  // 평면 격자의 Axis 는 대칭면 (P4 3-A 쐐기): 법선 속도 0, 접선 속도는 짝함수 (미끄럼). 축대칭과 같은 처리.
+  if (bc.r_min.kind == BoundaryKind::Axis && g.r0 != 0.0) {
+    throw std::invalid_argument("axis (or planar symmetry) boundary requires a grid starting at r = 0");
   }
   if (axisym && g.r0 == 0.0 && bc.r_min.kind != BoundaryKind::Axis) {
     throw std::invalid_argument("axisymmetric grid starting at r = 0 needs an axis boundary");
@@ -96,8 +98,9 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
   geom_valid_ = !p_.body;
   if (p_.body) {
     if (!p_.body->shape) throw std::invalid_argument("body has no shape");
-    if (!axisym || g.r0 != 0.0) {
-      throw std::invalid_argument("bodies are supported on axisymmetric grids from the axis only");
+    // 축대칭은 축에서 시작하는 격자만. 평면 격자도 허용한다 (P4 3-A 쐐기의 반쪽, x = 0 대칭면).
+    if (axisym && g.r0 != 0.0) {
+      throw std::invalid_argument("bodies on axisymmetric grids need a grid starting at the axis");
     }
     if (periodic_z_) throw std::invalid_argument("bodies are not supported with periodic z");
   }
@@ -881,7 +884,10 @@ void FlowSolver::step_implicit(double dt) {
     }
     for (int i = 0; i < g.nr; ++i) {
       for (int j = 0; j < nz; ++j) {
-        const bool west = !(g.geometry == Geometry::Axisymmetric && i == 0) && pgeom_.open_u(i, j) > 0.0;
+        // 축 (축대칭) 과 대칭면 (평면, P4) 의 r = 0 면은 속도가 정해져 압력을 잇지 않는다.
+        // 대칭면 면을 열린 면으로 세면 물체 옆에서 이웃과 끊긴 셀이 압력 미지수가 되어
+        // 압축성 항만 남아 폭주한다 (2026-10-23, 쐐기 3-A 개발 실행).
+        const bool west = !(i == 0 && p_.bc.r_min.kind == BoundaryKind::Axis) && pgeom_.open_u(i, j) > 0.0;
         const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
                          pgeom_.open_w(i, j + 1) > 0.0;
         pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
@@ -1003,7 +1009,24 @@ void FlowSolver::step_implicit(double dt) {
     for (int i = 0; i < g.nr; ++i) {
       for (int j = 0; j < nz; ++j) {
         const double pa = p_inc_(i, j);
-        if (!(pa > 0.0)) throw std::runtime_error("compressible air: non-positive absolute pressure");
+        // 공기가 없는 셀 (물, 고체) 과 이번 단계 압력 미지수가 아닌 셀 (물체 옆 컷셀 중 모든 면을
+        // 운동량이 정한 셀) 은 압축성 항이 없다. 그런 셀의 압력은 0 으로 남아 있을 수 있다.
+        const bool no_pressure = p_.body && !pgeom_.active[static_cast<std::size_t>(i) * nz + j];
+        if (m.air_fraction(i, j) <= 0.0 || no_pressure) {
+          psi_vol_[static_cast<std::size_t>(i) * nz + j] = 0.0;
+          continue;
+        }
+        // VOF 잔여 공기 (물 셀의 1e−6 이하) 는 실제 공기가 아니다. 그런 셀에 물의 음압이 걸리면
+        // 압축성 항을 빼고 넘어간다 (P4 에서 확인; 압력이 양수인 P3 계산은 그대로).
+        if (!(pa > 0.0) && m.air_fraction(i, j) <= 1e-6) {
+          psi_vol_[static_cast<std::size_t>(i) * nz + j] = 0.0;
+          continue;
+        }
+        if (!(pa > 0.0)) {
+          throw std::runtime_error("compressible air: non-positive absolute pressure at cell (" + std::to_string(i) +
+                                   ", " + std::to_string(j) + "), p = " + std::to_string(pa) +
+                                   ", air fraction " + std::to_string(m.air_fraction(i, j)));
+        }
         psi_vol_[static_cast<std::size_t>(i) * nz + j] =
             m.air_fraction(i, j) / (p_.air_kappa * pa) * g.cell_volume(i) / (dt * dt);
       }
@@ -1030,8 +1053,11 @@ void FlowSolver::step_implicit(double dt) {
         ++count;
       }
     }
-    for (std::size_t c = 0; c < div_b.size(); ++c) {
-      if (pgeom_.active[c]) div_b[c] -= s / static_cast<double>(count);
+    // 비압축이면 우변 평균을 빼서 풀이 가능하게 한다. 압축성 공기는 행렬이 정칙이라 빼지 않는다 (P4).
+    if (p_.air_kappa <= 0.0) {
+      for (std::size_t c = 0; c < div_b.size(); ++c) {
+        if (pgeom_.active[c]) div_b[c] -= s / static_cast<double>(count);
+      }
     }
     Potential& phi = phi_[0];
     record(refined_solve(op_mom_.matrix, op_mom_.preconditioner, div_b, phi.hi, phi.lo,

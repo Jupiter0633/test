@@ -20,10 +20,17 @@ struct Fractions {
   flow::Array2D face_u;  // (nr+1, nz)
   flow::Array2D face_w;  // (nr, nz+1)
   flow::Array2D corner;  // (nr+1, nz+1)
+  // 셀 전체 체적 대비 공기 비율 (P4, 물체가 있을 때만). 비어 있으면 1 − cell.
+  flow::Array2D air;
 };
 
 // 셀 체적분율 f 에서 PLIC 재구성으로 면 제어체적의 물 비율을 구한다
 Fractions fractions_from_vof(const flow::Grid& g, const flow::Array2D& f);
+
+// 물체가 있을 때 (P4). f: 셀 전체 체적 대비 물 비율, phi: 유체 체적 비율 (body::fluid_fraction).
+// 밀도·점성은 유체 부분 안의 물 비율 f/φ 로 만든다 (물에 잠긴 컷셀이 물 밀도를 갖도록; 고체 셀은 공기 값).
+// 공기 비율(압축성)은 고체를 뺀 φ − f.
+Fractions fractions_with_solid(const flow::Grid& g, const flow::Array2D& f, const flow::Array2D& phi);
 
 class VofMaterial : public flow::Material {
  public:

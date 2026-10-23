@@ -3,6 +3,8 @@
 // P2: 물체에 작용하는 유체력 (표면 적분).
 // 근거: docs/design/03_verification_plan.md §1.2 (힘 = 물체 표면 유체력의 축 방향 성분)
 
+#include <functional>
+
 #include "body/cut_cell.h"
 #include "flow/grid.h"
 
@@ -22,6 +24,18 @@ double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const 
 // 경계 조각이 격자면과 겹치는 경우(격자면에 맞는 물체의 옆면)는 다루지 않는다.
 double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const Shape& shape,
                            double z_center, const flow::Array2D& w, double mu, double body_w = 0.0);
+
+// 경계 조각 중 select 가 참인 것들의 압력 면적평균 Σ p n_z dA / Σ n_z dA (P4 바닥면·센서 압력).
+// 압력은 axial_pressure_force 와 같은 1차 외삽. 고른 조각의 Σ n_z dA 가 0 이면 0 을 돌려준다.
+double average_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p,
+                                const std::function<bool(const BoundaryPiece&)>& select);
+
+// 위와 같되 조각 길이 × r 가중 평균 (법선이 수평인 옆벽 압력, 3-I)
+double average_surface_pressure_by_length(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p,
+                                          const std::function<bool(const BoundaryPiece&)>& select);
+
+// 경계 조각 대표점 압력 (1차 외삽) 의 최댓값 (P4 한 점 최대 압력, 3-D)
+double max_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p);
 
 // 제어면 운동량 수지로 구한 물체의 축 방향 힘 (정상 상태, 축대칭, 2π 포함).
 // 닫힌 면: 옆면 r = rs, 아랫면 z = z_bottom, 윗면 z = z_top (모두 격자면에 맞아야 한다).

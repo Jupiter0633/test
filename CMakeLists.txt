@@ -87,7 +87,8 @@ add_library(hcw_verify_cases STATIC
   src/verify/p1_cases.cpp
   src/verify/potential.cpp
   src/verify/p2_cases.cpp
-  src/verify/p3_cases.cpp)
+  src/verify/p3_cases.cpp
+  src/verify/p4_cases.cpp)
 target_link_libraries(hcw_verify_cases PUBLIC hcw_flow)
 
 add_executable(hcw_verify src/app/verify_main.cpp)

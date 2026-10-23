@@ -23,6 +23,39 @@ double solid_fraction_z_face(const flow::Grid& g, double r0, double r1, double r
 
 }  // namespace
 
+flow::Array2D fluid_fraction(const flow::Grid& g, const Shape& shape, double zc) {
+  flow::Array2D phi(g.nr, g.nz, 1.0);
+  static const double x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563,
+                              0.8611363115940526};
+  static const double w[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461,
+                              0.3478548451374538};
+  const double s_lo = zc - shape.half_height(), s_hi = zc + shape.half_height();
+  const bool axisym = g.geometry == flow::Geometry::Axisymmetric;
+  auto area = [&](double r0, double r1) { return axisym ? 0.5 * (r1 * r1 - r0 * r0) : r1 - r0; };
+  for (int j = 0; j < g.nz; ++j) {
+    const double z0 = std::max(g.zf(j), s_lo), z1 = std::min(g.zf(j + 1), s_hi);
+    if (z1 <= z0) continue;
+    for (int i = 0; i < g.nr; ++i) {
+      const double r0 = g.rf(i), r1 = g.rf(i + 1);
+      double solid = 0.0;
+      constexpr int kSub = 8;
+      for (int s = 0; s < kSub; ++s) {
+        const double za = z0 + (z1 - z0) * s / kSub, zb = z0 + (z1 - z0) * (s + 1) / kSub;
+        for (int q = 0; q < 4; ++q) {
+          const double z = 0.5 * (za + zb) + 0.5 * (zb - za) * x[q];
+          double radius;
+          if (!shape.r_extent(z - zc, radius)) continue;
+          const double b = std::min(r1, radius);
+          if (b > r0) solid += 0.5 * (zb - za) * w[q] * area(r0, b);
+        }
+      }
+      const double v = solid / (area(r0, r1) * g.dz);
+      phi(i, j) = v < 1e-12 ? 1.0 : (v > 1.0 - 1e-12 ? 0.0 : 1.0 - v);
+    }
+  }
+  return phi;
+}
+
 CutGeometry open_geometry(const flow::Grid& g) {
   CutGeometry c;
   c.open_u = flow::Array2D(g.nr + 1, g.nz, 1.0);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 #include "common/parallel.h"
 #include "interface/plic.h"
@@ -102,6 +103,50 @@ Fractions fractions_from_vof(const flow::Grid& g, const flow::Array2D& f) {
   return fr;
 }
 
+Fractions fractions_with_solid(const flow::Grid& g, const flow::Array2D& f, const flow::Array2D& phi) {
+  flow::Array2D fe(g.nr, g.nz);
+  flow::Array2D air(g.nr, g.nz);
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) {
+      const double ph = phi(i, j);
+      fe(i, j) = ph > kEmpty ? std::clamp(f(i, j) / ph, 0.0, 1.0) : 0.0;
+      air(i, j) = std::max(0.0, ph - f(i, j));
+    }
+  }
+  // 고체로 가득 찬 셀은 이웃 유체 셀의 값으로 채운다 (두 겹). 물체 옆 면의 반쪽 제어체적이 고체 셀에
+  // 걸칠 때 고체를 공기로 보아 물 쪽 면 밀도가 반으로 줄어드는 것을 막는다.
+  std::vector<char> known(static_cast<std::size_t>(g.nr) * g.nz);
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) known[static_cast<std::size_t>(i) * g.nz + j] = phi(i, j) > kEmpty;
+  }
+  for (int pass = 0; pass < 2; ++pass) {
+    std::vector<char> next = known;
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < g.nz; ++j) {
+        if (known[static_cast<std::size_t>(i) * g.nz + j]) continue;
+        double s = 0.0;
+        int c = 0;
+        for (int di = -1; di <= 1; ++di) {
+          for (int dj = -1; dj <= 1; ++dj) {
+            const int ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= g.nr || jj >= g.nz || !known[static_cast<std::size_t>(ii) * g.nz + jj]) continue;
+            s += fe(ii, jj);
+            ++c;
+          }
+        }
+        if (c > 0) {
+          fe(i, j) = s / c;
+          next[static_cast<std::size_t>(i) * g.nz + j] = 1;
+        }
+      }
+    }
+    known.swap(next);
+  }
+  Fractions fr = fractions_from_vof(g, fe);
+  fr.air = air;
+  return fr;
+}
+
 void VofMaterial::set(const Fractions& a, double t_a, const Fractions& b, double t_b) {
   a_ = a;
   b_ = b;
@@ -126,8 +171,11 @@ void VofMaterial::evaluate(const flow::Grid& g, double t, flow::MaterialArrays& 
   m.mu_cell = flow::Array2D(g.nr, g.nz);
   m.mu_corner = flow::Array2D(g.nr + 1, g.nz + 1);
   m.air_fraction = flow::Array2D(g.nr, g.nz);
+  const bool has_air = a_.air.ni() == g.nr && b_.air.ni() == g.nr;
   for (int i = 0; i < g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) m.air_fraction(i, j) = 1.0 - lerp(a_.cell, b_.cell, i, j);
+    for (int j = 0; j < g.nz; ++j) {
+      m.air_fraction(i, j) = has_air ? lerp(a_.air, b_.air, i, j) : 1.0 - lerp(a_.cell, b_.cell, i, j);
+    }
   }
   for (int i = 0; i <= g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {

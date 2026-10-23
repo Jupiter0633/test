@@ -347,10 +347,11 @@ void test_invalid_setups() {
   b.grid = Grid(Geometry::Planar, 4, 4, 0.0, 1.0, 0.0, 1.0);
   b.bc.r_min.kind = BoundaryKind::Periodic;
   throws(b, "unpaired periodic boundary");
+  // 평면 격자의 Axis 는 x = 0 대칭면으로 허용 (P4 3-A, 2026-10-23). r0 ≠ 0 이면 거부.
   Problem c;
-  c.grid = Grid(Geometry::Planar, 4, 4, 0.0, 1.0, 0.0, 1.0);
+  c.grid = Grid(Geometry::Planar, 4, 4, 0.5, 1.0, 0.0, 1.0);
   c.bc.r_min.kind = BoundaryKind::Axis;
-  throws(c, "axis in planar geometry");
+  throws(c, "axis (symmetry) boundary away from r = 0");
 }
 
 }  // namespace

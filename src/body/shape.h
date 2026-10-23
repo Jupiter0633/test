@@ -67,4 +67,22 @@ class Cylinder final : public Shape {
   double a_, h_;
 };
 
+// 쐐기 (P4 3-A, 평면 2D 의 반쪽; 축 r = 0 이 대칭면). 꼭짓점이 아래, 반폭 a, 데드라이즈 β.
+// 높이 h = a tan β. 중심 기준 z ∈ [−h/2, h/2], 고체: z ≥ −h/2 + r tan β, z ≤ h/2.
+class Wedge final : public Shape {
+ public:
+  Wedge(double a, double deadrise_rad);
+  bool inside(double r, double z) const override;
+  bool z_extent(double r, double& lo, double& hi) const override;
+  bool r_extent(double z, double& radius) const override;
+  double half_height() const override { return 0.5 * h_; }
+  std::array<double, 2> outward_normal(double r, double z) const override;
+  double distance(double r, double z) const override;
+  double a() const { return a_; }
+  double deadrise() const { return beta_; }
+
+ private:
+  double a_, beta_, t_, h_;  // t_ = tan β
+};
+
 }  // namespace hcw::body

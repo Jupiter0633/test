@@ -142,6 +142,39 @@ double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const 
   return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
 }
 
+double average_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p,
+                                const std::function<bool(const BoundaryPiece&)>& select) {
+  double sp = 0.0, sa = 0.0;
+  for (const auto& piece : geom.pieces) {
+    if (!select(piece)) continue;
+    const double w = piece.nz_area;  // 이미 r 가중
+    sp += extrapolate(g, geom, p, piece.i, piece.j, piece.r, piece.z) * w;
+    sa += w;
+  }
+  return sa != 0.0 ? sp / sa : 0.0;
+}
+
+double average_surface_pressure_by_length(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p,
+                                          const std::function<bool(const BoundaryPiece&)>& select) {
+  double sp = 0.0, sa = 0.0;
+  for (const auto& piece : geom.pieces) {
+    if (!select(piece) || !(piece.length > 0.0)) continue;
+    const double w = piece.length * g.metric(piece.r);
+    sp += extrapolate(g, geom, p, piece.i, piece.j, piece.r, piece.z) * w;
+    sa += w;
+  }
+  return sa > 0.0 ? sp / sa : 0.0;
+}
+
+double max_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p) {
+  double m = -1e300;
+  for (const auto& piece : geom.pieces) {
+    if (piece.length <= 0.0 && piece.nz_area == 0.0) continue;
+    m = std::max(m, extrapolate(g, geom, p, piece.i, piece.j, piece.r, piece.z));
+  }
+  return m;
+}
+
 double axial_force_control_surface(const flow::Grid& g, const flow::Array2D& u,
                                    const flow::Array2D& w, const flow::Array2D& p, double mu,
                                    double rho, double rs, double z_bottom, double z_top) {

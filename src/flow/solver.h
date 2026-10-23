@@ -109,6 +109,8 @@ class FlowSolver {
   FlowSolver(Problem problem, SolverOptions options = {});
 
   const Grid& grid() const { return p_.grid; }
+  const std::shared_ptr<const Body>& body() const { return p_.body; }
+  const Problem& problem() const { return p_; }
   double time() const { return t_; }
   const Array2D& u() const { return u_; }
   const Array2D& w() const { return w_; }
