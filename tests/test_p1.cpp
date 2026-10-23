@@ -1,11 +1,16 @@
-// P1 단위 시험: Jet 도함수, 켤레기울기 해법, 보정 해법, 투영 후 발산, 경계 처리.
+// P1 단위 시험: Jet 도함수, 켤레기울기 해법, 보정 해법, 투영 후 발산, 경계 처리,
+// 다중 스레드 결과가 1 스레드와 비트 단위로 같은지.
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "common/parallel.h"
 #include "flow/poisson.h"
 #include "flow/solver.h"
 #include "verify/jet.h"
@@ -130,6 +135,127 @@ void test_refined_solve() {
   expect(again.converged && again.iterations == 0, "warm start from a converged solution");
 }
 
+// 격자 nr×nz (셀 c = i·nz + j) 의 변수 계수 압력형 행렬. periodic 이면 두 방향 모두 감는다.
+// skew 이면 (i, j)–(i−1, j+1) 연결을 더해 파이프라인 순서로 나눌 수 없는 행렬을 만든다.
+CsrMatrix grid_matrix(int nr, int nz, bool periodic, bool skew) {
+  const int n = nr * nz;
+  std::vector<std::vector<std::pair<int, double>>> rows(static_cast<std::size_t>(n));
+  auto add = [&](int a, int b, double v) {
+    for (auto& e : rows[a]) {
+      if (e.first == b) {
+        e.second += v;
+        return;
+      }
+    }
+    rows[a].push_back({b, v});
+  };
+  auto couple = [&](int a, int b, double coef) {
+    add(a, a, coef);
+    add(b, b, coef);
+    add(a, b, -coef);
+    add(b, a, -coef);
+  };
+  auto cell = [&](int i, int j) { return ((i + nr) % nr) * nz + (j + nz) % nz; };
+  for (int i = 0; i < nr; ++i) {
+    for (int j = 0; j < nz; ++j) {
+      const double k = 1.0 + 0.9 * std::sin(0.37 * i + 0.11 * j * j);  // 밀도비 흉내
+      if (i > 0 || periodic) couple(cell(i - 1, j), cell(i, j), k);
+      if (j > 0 || periodic) couple(cell(i, j - 1), cell(i, j), 1.0 / (k + 0.05));
+      if (skew && i > 0 && j + 1 < nz) couple(cell(i - 1, j + 1), cell(i, j), 0.1);
+    }
+  }
+  add(n - 1, n - 1, rows[n - 1][0].second);  // 정칙화 (해석기와 같은 방식: 마지막 대각 두 배)
+  CsrMatrix a;
+  a.n = n;
+  a.row_start.push_back(0);
+  for (auto& r : rows) {
+    std::sort(r.begin(), r.end());
+    for (const auto& e : r) {
+      a.col.push_back(e.first);
+      a.val.push_back(e.second);
+    }
+    a.row_start.push_back(static_cast<int>(a.col.size()));
+  }
+  return a;
+}
+
+bool same_bits(const std::vector<double>& x, const std::vector<double>& y) {
+  return x.size() == y.size() && std::memcmp(x.data(), y.data(), x.size() * sizeof(double)) == 0;
+}
+
+// 다중 스레드: 전처리·pcg·보정 해법이 스레드 수와 상관없이 1 스레드와 비트 단위로 같아야 한다.
+void test_threads_bitwise() {
+  struct Case {
+    int nr, nz;
+    bool periodic, skew, pipelined;
+    const char* label;
+  };
+  const Case cases[] = {{70, 96, false, false, true, "walls"},
+                        {64, 80, true, false, true, "periodic"},
+                        {64, 80, false, true, false, "skew (pipeline refused)"}};
+  for (const Case& c : cases) {
+    const CsrMatrix a = grid_matrix(c.nr, c.nz, c.periodic, c.skew);
+    std::vector<double> b(static_cast<std::size_t>(a.n));
+    for (int k = 0; k < a.n; ++k) b[k] = std::sin(0.013 * k) + 0.3 * std::cos(0.7 * k);
+    double mean = 0.0;
+    for (double v : b) mean += v;
+    for (double& v : b) v -= mean / a.n;
+
+    hcw::parallel::set_threads(1);
+    IncompleteCholesky ic1;
+    ic1.factor(a, c.nz);
+    std::vector<double> z1, x1, hi1, lo1;
+    ic1.apply(b, z1);
+    const SolveResult p1 = pcg(a, ic1, b, x1, 1e-10, 5000);
+    const SolveResult r1 = refined_solve(a, ic1, b, hi1, lo1, 1e-13, 20000);
+    expect(p1.converged && r1.converged, std::string("threads reference converges: ") + c.label);
+
+    for (int t : {2, 3, 4, 7}) {
+      hcw::parallel::set_threads(t);
+      IncompleteCholesky ic;
+      ic.factor(a, c.nz);
+      const std::string tag = std::string(c.label) + ", threads " + std::to_string(t);
+      expect((ic.pipeline_segments() > 0) == c.pipelined, "pipeline chosen as expected: " + tag);
+      std::vector<double> z, x, hi, lo;
+      ic.apply(b, z);
+      expect(same_bits(z, z1), "IC(0) apply bitwise identical: " + tag);
+      double side = 0.0;
+      ic.apply(b, z, [&] { side = b[0] + b[1]; });
+      expect(same_bits(z, z1) && side == b[0] + b[1], "IC(0) apply with side task: " + tag);
+      const SolveResult p = pcg(a, ic, b, x, 1e-10, 5000);
+      expect(same_bits(x, x1) && p.iterations == p1.iterations, "pcg bitwise identical: " + tag);
+      const SolveResult r = refined_solve(a, ic, b, hi, lo, 1e-13, 20000);
+      expect(same_bits(hi, hi1) && same_bits(lo, lo1) && r.iterations == r1.iterations &&
+                 r.relative_residual == r1.relative_residual,
+             "refined solve bitwise identical: " + tag);
+      // 1 스레드로 인수분해한 것을 여러 스레드에서 써도 (직렬 풀이) 같다
+      ic1.apply(b, z);
+      expect(same_bits(z, z1), "serial IC(0) under threads: " + tag);
+    }
+  }
+
+  // parallel_for 의 예외: 1 스레드에서 처음 나는 예외(가장 앞 인덱스)가 그대로 전달된다
+  hcw::parallel::set_threads(4);
+  std::string what;
+  try {
+    hcw::parallel::parallel_for(0, 10000, [](int lo, int hi) {
+      for (int i = lo; i < hi; ++i) {
+        if (i == 3000 || i == 9000) throw std::runtime_error("index " + std::to_string(i));
+      }
+    });
+  } catch (const std::exception& e) {
+    what = e.what();
+  }
+  expect(what == "index 3000", "parallel_for rethrows the first exception in index order");
+  // 병렬 구간 안에서 다시 나누지 않는다 (작업 스레드 위에서 직렬로 돈다)
+  int nested_ok = 1;
+  hcw::parallel::for_each_thread([&](int) {
+    if (hcw::parallel::available() != 1) nested_ok = 0;
+  });
+  expect(nested_ok == 1, "no nested parallel regions");
+  hcw::parallel::set_threads(1);
+}
+
 // 임의의 매끈한 속도장을 투영한 뒤 이산 발산이 반올림 수준인지
 void test_projection(Geometry geom, BoundaryKind rk, BoundaryKind zk, const std::string& label) {
   Problem pb;
@@ -243,6 +369,7 @@ int main() {
   test_large_density_ratio();
   test_boundary_values();
   test_invalid_setups();
+  test_threads_bitwise();
   std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   return g_failures == 0 ? 0 : 1;
 }

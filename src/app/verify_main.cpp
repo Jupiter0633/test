@@ -3,6 +3,7 @@
 // 결과는 화면과 results/verification/<단계>/<시험>/<UTC 시각>/report.txt 에 남긴다.
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "common/parallel.h"
 #include "common/text.h"
 #include "io/case_policy.h"
 #include "io/run_metadata.h"
@@ -91,6 +93,7 @@ std::string header_text(bool quick) {
     << b.build_config << "], " << b.platform << "\n"
     << "machine  : " << current_machine_name() << ", hardware threads "
     << std::thread::hardware_concurrency() << "\n"
+    << "threads  : " << parallel::describe() << "\n"
     << "mode     : " << (quick ? "QUICK (reduced grids, not a verification verdict)" : "FULL")
     << "\n";
   return o.str();
@@ -116,11 +119,13 @@ void save(const std::string& phase, const std::string& id, const std::string& te
 }
 
 void usage() {
-  std::cout << "usage: hcw_verify <test | P1 | P2> [--quick]\n"
+  std::cout << "usage: hcw_verify <test | P1 | P2> [--quick] [--threads N]\n"
                "  P1 tests: 1A, 1A-a, 1A-b, 1B, 1C, 1D   ('all' = P1, kept for compatibility)\n"
                "  P2 tests: 1E, 1F, 1G, 1H\n"
                "  P3 tests: 2A, 2B, 2C, 2D, 2F, 2H, 2A-B, 2C-B, 2F-B (-B: new convection scheme B)\n"
                "  --quick   reduced grids for a fast functional check (no verdict)\n"
+               "  --threads N   use N CPU threads (default 1, or the HCW_THREADS environment\n"
+               "                variable). Results are bitwise identical for any N.\n"
                "exit code: 0 if every requested test is VERIFIED (or quick mode), 4 otherwise\n";
 }
 
@@ -129,14 +134,32 @@ void usage() {
 int main(int argc, char** argv) {
   std::vector<std::string> args(argv + 1, argv + argc);
   bool quick = false;
+  std::string thread_error;
+  int threads = parallel::threads_from_environment(thread_error);
   for (auto it = args.begin(); it != args.end();) {
     if (*it == "--quick") {
       quick = true;
+      it = args.erase(it);
+    } else if (*it == "--threads") {
+      it = args.erase(it);
+      char* end = nullptr;
+      const long n = it == args.end() ? 0 : std::strtol(it->c_str(), &end, 10);
+      if (n < 1 || n > 256 || *end != '\0') {
+        std::cerr << "error: --threads needs an integer from 1 to 256\n";
+        return 1;
+      }
+      threads = static_cast<int>(n);
+      thread_error.clear();
       it = args.erase(it);
     } else {
       ++it;
     }
   }
+  if (threads < 1) {
+    std::cerr << "error: " << thread_error << "\n";
+    return 1;
+  }
+  parallel::set_threads(threads);
   if (args.size() != 1) {
     usage();
     return 1;
