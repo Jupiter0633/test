@@ -97,6 +97,10 @@ struct SolverOptions {
   // 압축성 항 ψ = 공기/(κ p) 에 쓰는 압력의 하한 [Pa] (03 §1.4, P4 는 1e3). 0 이면 하한 없음 —
   // 공기가 있는 셀의 압력이 0 이하이면 예외 (P3 까지의 동작).
   double air_pressure_floor = 0.0;
+  // 물 압력 하한 [Pa] (압축성 공기에서만, 0 이면 끔): 압력 갱신 뒤 절대압력이 이보다 낮은 셀을 이 값으로
+  // 올린다 (공동화의 단순 근사). 작은 공기 셀이 한 단계에 사라질 때 물에 비물리적 인장 (−600 kPa) 과
+  // 한 단계 힘 튐이 생기던 것을 막는다 (2026-10-23 비교, P4 는 2.3 kPa = 20 ℃ 증기압).
+  double water_pressure_floor = 0.0;
 };
 
 struct SolverStats {
@@ -113,6 +117,8 @@ struct SolverStats {
   double max_momentum_residual = 0.0;
   // 공기 압력 하한이 쓰인 셀 수의 누적 (단계마다 센 셀 수의 합)
   long pressure_floor_cells = 0;
+  // water_pressure_floor 가 올린 셀 수의 누적
+  long water_floor_cells = 0;
 };
 
 class FlowSolver {

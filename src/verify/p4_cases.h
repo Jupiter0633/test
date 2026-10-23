@@ -24,7 +24,9 @@ TestReport entry_dev_study(int n, double dt_factor);
 
 // 개발용 그림 자료: 위와 같은 원판 입수를 계산하며 interval [s] 마다 셀 값 (snap_NNN.csv) 과
 // 끝에 시간 이력 (history.csv: t, 힘, 바닥 평균 압력, 포켓 압력) 을 dir 에 쓴다. 그림은 tools/plot_entry.py.
-TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval);
+// water_floor = false 이면 물 압력 하한을 끈다 (개발 비교용)
+TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval,
+                               bool water_floor = true);
 
 // Celik 등의 GCI_fine (안전계수 1.25, 격자비 2). phi1: 가장 고운 격자, phi3: 가장 거친 격자.
 // 차이 비 R = (phi2 − phi1)/(phi3 − phi2) 가 0 < R < 1 이 아니면 false.

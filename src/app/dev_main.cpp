@@ -19,7 +19,7 @@ namespace {
 
 void usage() {
   std::cout << "usage: hcw_dev entry-dt <a/dx> <dt factor> [--threads N]\n"
-               "       hcw_dev entry-snap <a/dx> <dt factor> <out dir> <interval ms> [--threads N]\n"
+               "       hcw_dev entry-snap <a/dx> <dt factor> <out dir> <interval ms> [no-water-floor] [--threads N]\n"
                "  entry-dt  disk entry (P4 3-B conditions) with the time-step rule scaled by <dt factor>;\n"
                "            prints impulse, peaks and the 3-F surface vs control-volume force (development only)\n"
                "  entry-snap  same run, writing cell snapshots and history.csv for tools/plot_entry.py\n";
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
   if (threads < 1) threads = 1;
   parallel::set_threads(threads);
   const bool snap = !args.empty() && args[0] == "entry-snap";
-  if (!((args.size() == 3 && args[0] == "entry-dt") || (args.size() == 5 && snap))) {
+  if (!((args.size() == 3 && args[0] == "entry-dt") || ((args.size() == 5 || args.size() == 6) && snap))) {
     usage();
     return 1;
   }
@@ -68,7 +68,9 @@ int main(int argc, char** argv) {
             << std::thread::hardware_concurrency() << "\n"
             << "threads  : " << parallel::describe() << "\n";
   const verify::TestReport rep =
-      snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str())) : verify::entry_dev_study(n, f);
+      snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str()),
+                                         !(args.size() == 6 && args[5] == "no-water-floor"))
+           : verify::entry_dev_study(n, f);
   for (const auto& r : rep.runs) {
     std::cout << "[" << r.label << "]" << (r.failure.empty() ? "" : "  " + r.failure) << "\n";
     for (const auto& [k, v] : r.metrics) std::cout << "  " << k << " = " << v << "\n";

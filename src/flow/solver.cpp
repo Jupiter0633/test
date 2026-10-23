@@ -1034,11 +1034,12 @@ void FlowSolver::step_implicit(double dt) {
     for (int i = 0; i < g.nr; ++i) {
       for (int j = 0; j < nz; ++j) {
         const double pa = p_inc_(i, j);
+        const std::size_t kc = static_cast<std::size_t>(i) * nz + j;
         // 공기가 없는 셀 (물, 고체) 과 이번 단계 압력 미지수가 아닌 셀 (물체 옆 컷셀 중 모든 면을
         // 운동량이 정한 셀) 은 압축성 항이 없다. 그런 셀의 압력은 0 으로 남아 있을 수 있다.
         const bool no_pressure = p_.body && !pgeom_.active[static_cast<std::size_t>(i) * nz + j];
         if (m.air_fraction(i, j) <= 0.0 || no_pressure) {
-          psi_vol_[static_cast<std::size_t>(i) * nz + j] = 0.0;
+          psi_vol_[kc] = 0.0;
           continue;
         }
         // VOF 잔여 공기 (물 셀의 1e−6 이하) 는 실제 공기가 아니다. 그런 셀에 물의 음압이 걸리면
@@ -1059,7 +1060,7 @@ void FlowSolver::step_implicit(double dt) {
                                    ", air fraction " + std::to_string(m.air_fraction(i, j)));
         }
         const double psi_v = m.air_fraction(i, j) / (p_.air_kappa * p_use) * g.cell_volume(i);
-        psi_vol_[static_cast<std::size_t>(i) * nz + j] = psi_v / (tau * tau);
+        psi_vol_[kc] = psi_v / (tau * tau);
         // 직전 단계에 압력이 없던 셀 (물체 옆에서 새로 생김) 과 하한이 걸린 셀 (이번 또는 직전 압력이
         // 하한 아래) 은 이력 항을 쓰지 않는다 (그 셀만 1 차). 하한으로 키운 ψ 에 실제 압력 차를 곱하면
         // 폭주한다 (2026-10-23, a/Δ = 32 Δt × ¼ 개발 실행에서 6.3 ms 에 발산).
@@ -1148,6 +1149,18 @@ void FlowSolver::step_implicit(double dt) {
       // 압축성 공기에서는 절대 압력이므로 평균을 빼지 않는다
       const double shift = p_.air_kappa > 0.0 ? 0.0 : sum / vol;
       p_inc_(i, j) = pg.active[static_cast<std::size_t>(i) * nz + j] ? p_inc_(i, j) - shift : 0.0;
+    }
+  }
+  // 물 압력 하한 (공동화 근사): 절대압력의 하한
+  if (opt_.water_pressure_floor > 0.0 && p_.air_kappa > 0.0) {
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < nz; ++j) {
+        if (!pg.active[static_cast<std::size_t>(i) * nz + j]) continue;
+        if (p_inc_(i, j) < opt_.water_pressure_floor) {
+          p_inc_(i, j) = opt_.water_pressure_floor;
+          ++stats_.water_floor_cells;
+        }
+      }
     }
   }
 

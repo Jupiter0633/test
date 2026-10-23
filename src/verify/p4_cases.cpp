@@ -60,6 +60,8 @@ struct EntrySetup {
   // 개발용 그림 자료: 비어 있지 않으면 snapshot_interval [s] 마다 셀 값을 이 폴더에 CSV 로 쓴다
   std::string snapshot_dir;
   double snapshot_interval = 0.0;
+  // 물 압력 하한 (03 §1.4 구현 보충, 2026-10-23). 개발 비교용으로 끌 수 있다.
+  bool water_floor = true;
 };
 
 struct EntryOut {
@@ -298,6 +300,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   opt.air_pressure_floor = 1e3;  // 03 §1.4 공기 압력 하한
   opt.projection_tolerance *= es.tol_factor;
   opt.pressure_tolerance *= es.tol_factor;
+  if (es.water_floor) opt.water_pressure_floor = 2.3e3;  // 20 ℃ 물의 증기압
   auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
   interface::TwoPhaseSolver s(pb, mat, f0, true, opt);
   s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; }, false);
@@ -314,6 +317,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   double pocket_max_volume = 0.0, side_peak = -1e300;
   bool pocket_seen = false;
   long retries = 0;
+  double next_progress = 0.1;
   double next_snapshot = 0.0;
   int snapshot_count = 0;
   double f_prev = 0.0, t_prev = 0.0;
@@ -484,6 +488,13 @@ EntryOut run_entry_impl(const EntrySetup& es) {
         }
       }
       measure();
+      // 진행 상황 (오류 출력, 보고서에는 들어가지 않음): 끝 시각의 10 % 마다
+      if (s.time() >= next_progress * t_end - 1e-15) {
+        std::fprintf(stderr, "  progress %3.0f %%  t = %.3f ms  dt = %.2e s  max|u| = %.2f m/s  steps %ld  %.0f s\n",
+                     100.0 * s.time() / t_end, s.time() * 1e3, dt, max_speed(s.flow()),
+                     static_cast<long>(s.flow().stats().steps), seconds_since(t0));
+        while (next_progress * t_end <= s.time() + 1e-15) next_progress += 0.1;
+      }
       if (s.flow().stats().solver_failed || !std::isfinite(out.force.back())) break;
     }
     run.metrics["end_time_over_t_end"] = s.time() / t_end;
@@ -502,6 +513,14 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     run.metrics["steps"] = static_cast<double>(s.flow().stats().steps);
     run.metrics["step_retries"] = static_cast<double>(retries);
     run.metrics["pressure_floor_cells"] = static_cast<double>(s.flow().stats().pressure_floor_cells);
+    if (!es.snapshot_dir.empty()) {  // 개발용 그림 실행에서만
+      run.metrics["water_floor_cells"] = static_cast<double>(s.flow().stats().water_floor_cells);
+      double jump = 0.0, pmin = 1e300;
+      for (std::size_t k = 1; k < out.force.size(); ++k) jump = std::max(jump, std::abs(out.force[k] - out.force[k - 1]));
+      for (std::size_t k = 1; k < out.p_min_abs.size(); ++k) pmin = std::min(pmin, out.p_min_abs[k]);
+      run.metrics["max_force_jump_per_step"] = jump;
+      run.metrics["min_abs_pressure"] = pmin;
+    }
     if (es.kind == BodyKind::ClosedCylinder) run.metrics["peak_side_wall_pressure"] = side_peak;
     run.seconds = seconds_since(t0);
     finish_run(run, s.flow());
@@ -595,7 +614,8 @@ TestReport entry_dev_study(int n, double dt_factor) {
   return rep;
 }
 
-TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval) {
+TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval,
+                               bool water_floor) {
   TestReport rep = p4_report("dev-snap", "Disk entry snapshots for figures (development only, not a verdict)");
   std::filesystem::create_directories(dir);
   EntrySetup es;
@@ -603,6 +623,8 @@ TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, 
   es.dt_factor = dt_factor;
   es.snapshot_dir = dir;
   es.snapshot_interval = interval;
+  es.water_floor = water_floor;
+  rep.notes.push_back(std::string("water pressure floor: ") + (water_floor ? "on (2.3 kPa)" : "off"));
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
   std::ofstream h(std::filesystem::path(dir) / "history.csv");
