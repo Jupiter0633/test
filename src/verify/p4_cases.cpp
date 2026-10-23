@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -54,6 +57,9 @@ struct EntrySetup {
   double kappa = 1.4;  // 0 이면 비압축 공기
   bool cv = false;     // 3-F 제어면 운동량 수지
   double cv_rs = 2.0, cv_zb = -2.0, cv_zt = 1.25;
+  // 개발용 그림 자료: 비어 있지 않으면 snapshot_interval [s] 마다 셀 값을 이 폴더에 CSV 로 쓴다
+  std::string snapshot_dir;
+  double snapshot_interval = 0.0;
 };
 
 struct EntryOut {
@@ -306,6 +312,8 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   double pocket_max_volume = 0.0, side_peak = -1e300;
   bool pocket_seen = false;
   long retries = 0;
+  double next_snapshot = 0.0;
+  int snapshot_count = 0;
   double f_prev = 0.0, t_prev = 0.0;
   CvTerms cv_prev;
   bool have_prev = false;
@@ -349,6 +357,27 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     const double ppt = body::max_surface_pressure(g, geom, p) - ref;
     const Array2D phi = s.fluid_fraction(t);
     const Pocket pk = find_pocket(g, s.vof().f(), phi, p, geom.active, zc - hh);
+    if (!es.snapshot_dir.empty() && t >= next_snapshot - 1e-12) {
+      // 셀마다: 중심 r, z, 유체 비율 φ, 유체 안 물 비율, 게이지 압력, 셀 중심 속도 (u, w)
+      char name[64];
+      std::snprintf(name, sizeof(name), "snap_%03d.csv", snapshot_count++);
+      std::ofstream o(std::filesystem::path(es.snapshot_dir) / name);
+      o << "# t=" << t << " zc=" << zc << " half_height=" << hh << " a=" << kA << " planar=" << (planar ? 1 : 0)
+        << " nr=" << g.nr << " nz=" << g.nz << " dr=" << g.dr << " dz=" << g.dz << " z0=" << g.z0 << "\n";
+      o << "r,z,phi,water,p_gauge,u,w,active\n";
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = 0; j < g.nz; ++j) {
+          const double ph = phi(i, j);
+          const double fw = ph > 1e-12 ? std::clamp(s.vof().f()(i, j) / ph, 0.0, 1.0) : 0.0;
+          const bool act = geom.active[static_cast<std::size_t>(i) * g.nz + j] != 0;
+          const double uc = 0.5 * (s.flow().u()(i, j) + s.flow().u()(i + 1, j));
+          const double wc = 0.5 * (s.flow().w()(i, j) + s.flow().w()(i, j + 1));
+          o << g.rc(i) << "," << g.zc(j) << "," << ph << "," << fw << "," << (act ? p_gauge(i, j) : 0.0) << "," << uc
+            << "," << wc << "," << (act ? 1 : 0) << "\n";
+        }
+      }
+      next_snapshot += es.snapshot_interval;
+    }
     // 젖은 반폭 (3-A): 바닥면 조각 중, 그 셀 또는 바로 아래 셀의 유체 안 물 비율이 0.5 를 넘는 가장 바깥 r
     double wet = 0.0;
     auto wet_cell = [&](int i, int j) {
@@ -535,6 +564,27 @@ TestReport entry_dev_study(int n, double dt_factor) {
     rep.notes.push_back("F_s / F_cv (N) at half steps: " + hs);
   }
   rep.runs.push_back(o.run);
+  rep.verdict = o.run.failure.empty() ? "DEV_ONLY" : "DEV_ONLY (" + o.run.failure.substr(0, o.run.failure.find(' ')) + ")";
+  return rep;
+}
+
+TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval) {
+  TestReport rep = p4_report("dev-snap", "Disk entry snapshots for figures (development only, not a verdict)");
+  std::filesystem::create_directories(dir);
+  EntrySetup es;
+  es.n = n;
+  es.dt_factor = dt_factor;
+  es.snapshot_dir = dir;
+  es.snapshot_interval = interval;
+  EntryOut o = run_entry(es);
+  o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
+  std::ofstream h(std::filesystem::path(dir) / "history.csv");
+  h << "t,force,p_bottom,p_pocket\n";
+  for (std::size_t k = 0; k < o.t.size(); ++k) {
+    h << o.t[k] << "," << o.force[k] << "," << o.p_bottom[k] << "," << o.pocket_p[k] << "\n";
+  }
+  rep.runs.push_back(o.run);
+  rep.notes.push_back("snapshots and history.csv written to " + dir);
   rep.verdict = o.run.failure.empty() ? "DEV_ONLY" : "DEV_ONLY (" + o.run.failure.substr(0, o.run.failure.find(' ')) + ")";
   return rep;
 }

@@ -19,8 +19,10 @@ namespace {
 
 void usage() {
   std::cout << "usage: hcw_dev entry-dt <a/dx> <dt factor> [--threads N]\n"
+               "       hcw_dev entry-snap <a/dx> <dt factor> <out dir> <interval ms> [--threads N]\n"
                "  entry-dt  disk entry (P4 3-B conditions) with the time-step rule scaled by <dt factor>;\n"
-               "            prints impulse, peaks and the 3-F surface vs control-volume force (development only)\n";
+               "            prints impulse, peaks and the 3-F surface vs control-volume force (development only)\n"
+               "  entry-snap  same run, writing cell snapshots and history.csv for tools/plot_entry.py\n";
 }
 
 }  // namespace
@@ -46,13 +48,14 @@ int main(int argc, char** argv) {
   }
   if (threads < 1) threads = 1;
   parallel::set_threads(threads);
-  if (args.size() != 3 || args[0] != "entry-dt") {
+  const bool snap = !args.empty() && args[0] == "entry-snap";
+  if (!((args.size() == 3 && args[0] == "entry-dt") || (args.size() == 5 && snap))) {
     usage();
     return 1;
   }
   const int n = std::atoi(args[1].c_str());
   const double f = std::atof(args[2].c_str());
-  if (n < 4 || !(f > 0.0)) {
+  if (n < 4 || !(f > 0.0) || (snap && !(std::atof(args[4].c_str()) > 0.0))) {
     usage();
     return 1;
   }
@@ -64,7 +67,8 @@ int main(int argc, char** argv) {
             << "machine  : " << current_machine_name() << ", hardware threads "
             << std::thread::hardware_concurrency() << "\n"
             << "threads  : " << parallel::describe() << "\n";
-  const verify::TestReport rep = verify::entry_dev_study(n, f);
+  const verify::TestReport rep =
+      snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str())) : verify::entry_dev_study(n, f);
   for (const auto& r : rep.runs) {
     std::cout << "[" << r.label << "]" << (r.failure.empty() ? "" : "  " + r.failure) << "\n";
     for (const auto& [k, v] : r.metrics) std::cout << "  " << k << " = " << v << "\n";
