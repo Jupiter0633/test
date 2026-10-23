@@ -1060,8 +1060,12 @@ void FlowSolver::step_implicit(double dt) {
         }
         const double psi_v = m.air_fraction(i, j) / (p_.air_kappa * p_use) * g.cell_volume(i);
         psi_vol_[static_cast<std::size_t>(i) * nz + j] = psi_v / (tau * tau);
-        // 직전 단계에 압력이 없던 셀 (물체 옆에서 새로 생김) 은 이력 항을 쓰지 않는다
-        if (bdf2 && p_prev_(i, j) > 0.0) {
+        // 직전 단계에 압력이 없던 셀 (물체 옆에서 새로 생김) 과 하한이 걸린 셀 (이번 또는 직전 압력이
+        // 하한 아래) 은 이력 항을 쓰지 않는다 (그 셀만 1 차). 하한으로 키운 ψ 에 실제 압력 차를 곱하면
+        // 폭주한다 (2026-10-23, a/Δ = 32 Δt × ¼ 개발 실행에서 6.3 ms 에 발산).
+        const bool floored = bdf2 && opt_.air_pressure_floor > 0.0 &&
+                             (!(pa >= opt_.air_pressure_floor) || !(p_prev_(i, j) >= opt_.air_pressure_floor));
+        if (bdf2 && !floored && p_prev_(i, j) > 0.0) {
           bdf_extra[static_cast<std::size_t>(i) * nz + j] = psi_v * c2 * (pa - p_prev_(i, j)) / dt;
         }
       }
