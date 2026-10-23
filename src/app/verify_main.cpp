@@ -124,7 +124,7 @@ void usage() {
                "  P1 tests: 1A, 1A-a, 1A-b, 1B, 1C, 1D   ('all' = P1, kept for compatibility)\n"
                "  P2 tests: 1E, 1F, 1G, 1H\n"
                "  P3 tests: 2A, 2B, 2C, 2D, 2F, 2H, 2A-B, 2C-B, 2F-B (-B: new convection scheme B)\n"
-               "  P4 tests: 2T, 3A, 3E, 3I (report only), 3B, 3C, 3F, 3G   (3-D is reported inside the entry tests)\n"
+               "  P4 tests: 2T, 3A, 3E, 3I (report only), 3B, 3C, 3F, 3G, S1-S5 (stretched grids)   (3-D is reported inside the entry tests)\n"
                "  --quick   reduced grids for a fast functional check (no verdict)\n"
                "  --threads N   use N CPU threads (default 1, or the HCW_THREADS environment\n"
                "                variable). Results are bitwise identical for any N.\n"
@@ -171,12 +171,13 @@ int main(int argc, char** argv) {
   if (what == "all" || what == "P1") tests = {"1A-a", "1A-b", "1B", "1C", "1D"};
   else if (what == "P2") tests = {"1E", "1F", "1G", "1H"};
   else if (what == "P3") tests = {"2A", "2B", "2C", "2D", "2F", "2H", "2A-B", "2C-B", "2F-B"};
-  else if (what == "P4") tests = {"2T", "3A", "3B", "3C", "3E", "3F", "3G", "3I"};
+  else if (what == "P4") tests = {"S1", "S2", "S3", "S4", "S5", "2T", "3A", "3B", "3C", "3E", "3F", "3G", "3I"};
   else if (what == "1A") tests = {"1A-a", "1A-b"};
   else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D" ||
            what == "1E" || what == "1F" || what == "1G" || what == "1H" || what == "2A" || what == "2B" || what == "2C" || what == "2D" || what == "2F" ||
            what == "2H" || what == "2T" || what == "2A-B" || what == "2C-B" || what == "2F-B" || what == "3A" ||
-           what == "3B" || what == "3C" || what == "3E" || what == "3F" || what == "3G" || what == "3I")
+           what == "3B" || what == "3C" || what == "3E" || what == "3F" || what == "3G" || what == "3I" ||
+           what == "S1" || what == "S2" || what == "S3" || what == "S4" || what == "S5")
     tests = {what};
   else {
     usage();
@@ -214,6 +215,7 @@ int main(int argc, char** argv) {
     if (t == "3F") rep = run_3f(quick);
     if (t == "3G") rep = run_3g(quick);
     if (t == "3I") rep = run_3i(quick);
+    if (t.size() == 2 && t[0] == 'S') rep = run_s(std::string("S-") + t[1], quick);
     const std::string text = render(rep, header);
     std::cout << text;
     if (!quick) save(rep.phase, rep.id, text, quick);

@@ -9,9 +9,10 @@
 
 namespace hcw::verify {
 
-TestReport run_2b(bool quick);
-TestReport run_2a(bool quick, bool limiter = false);
-TestReport run_2c(bool quick, bool limiter = false);
+// plan 이 있으면 늘어나는 격자 시험 (S-2/S-3/S-4, 03 §1.4) 으로 실행
+TestReport run_2b(bool quick, const GridPlan* plan = nullptr);
+TestReport run_2a(bool quick, bool limiter = false, const GridPlan* plan = nullptr);
+TestReport run_2c(bool quick, bool limiter = false, const GridPlan* plan = nullptr);
 TestReport run_2d(bool quick);  // 2026-10-23 판정 시험으로 변경 (새 대류 방식 B)
 TestReport run_2f(bool quick, bool limiter = false);
 // 새 대류 방식 (B: 제한자 + 일관 수송) 의 정확도 (1-C, 1-A(b) 재풀이).

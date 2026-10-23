@@ -19,7 +19,7 @@ target_link_libraries(hcw_unit_tests_p4 PRIVATE hcw_verify_cases)
 add_test(NAME unit_p4 COMMAND hcw_unit_tests_p4)
 
 # 검증 시험의 축소판 (동작 확인용, 판정 아님). 전체 판정은 hcw_verify P1 / P2 로 따로 실행.
-foreach(t 1A 1B 1C 1D 1E 1F 1G 1H 2A 2B 2C 2D 2F 2H 2T 2A-B 2C-B 2F-B 3A 3B 3C 3E 3F 3G 3I)
+foreach(t 1A 1B 1C 1D 1E 1F 1G 1H 2A 2B 2C 2D 2F 2H 2T 2A-B 2C-B 2F-B 3A 3B 3C 3E 3F 3G 3I S1 S2 S3 S4 S5)
   add_test(NAME verify_quick_${t} COMMAND hcw_verify ${t} --quick)
   set_tests_properties(verify_quick_${t} PROPERTIES LABELS quick)
 endforeach()

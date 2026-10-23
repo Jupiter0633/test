@@ -70,7 +70,8 @@ struct Grid {
 
 // 늘어나는 격자 한 방향의 칸 경계 (03 §1.4).
 // 가장 거친 격자: [lo, hi] 에서 core [c0, c1] 은 크기 h_core 로 같고, 바깥은 이웃 크기 비 ratio (≤ 1.05) 로
-// 커지며 크기 상한 h_max. 영역 끝에 맞도록 바깥 칸들을 같은 비율로 늘이거나 줄인다.
+// 커지며 크기 상한 h_max. core 칸 크기는 정확히 h_core 로, core 를 칸 수가 정수가 되게
+// 양쪽으로 넓힌다. 바깥은 성장비 q ≤ ratio 를 영역 끝에 정확히 닿게 고른다.
 // refine 번 세분: 가장 거친 격자의 경계를 매개변수 s = k/N 에 대해 단조 3 차 보간 (PCHIP) 한 사상에서
 // s = k/(N·2^refine) 로 다시 잡는다. 균일 core 안의 경계는 정확히 등간격으로 나뉜다.
 std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, double h_core, double ratio,

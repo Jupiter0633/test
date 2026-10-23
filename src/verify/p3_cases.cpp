@@ -114,22 +114,29 @@ double sphere_cell_volume(double r0, double r1, double z0, double z1, double zc,
 }
 
 // ---------------------------------------------------------------- 2-B
-TestReport run_2b(bool quick) {
+TestReport run_2b(bool quick, const GridPlan* plan) {
   TestReport rep = p3_report("2-B", "Reversible transport of a spherical drop (axisymmetric)");
+  if (plan) {  // 늘어나는 격자 시험 (03 §1.4 S 시험, 기준 d753d5a, 격자 조건 변경 acd6130)
+    rep.id = plan->id;
+    rep.title += " on stretched grids";
+    rep.criteria_commit = "acd6130";
+  }
   const double T = 2.0, radius = 0.15, zc = 0.35;
   // Ψ₀ = (1/π) r² sin²(2πr) sin²(πz),  Ψ = Ψ₀ cos(πt/T)
   auto psi0 = [](double r, double z) {
     const double s1 = std::sin(2.0 * kPi * r), s2 = std::sin(kPi * z);
     return r * r * s1 * s1 * s2 * s2 / kPi;
   };
-  const std::vector<int> ns = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
+  std::vector<int> ns = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
+  if (plan) ns = quick ? std::vector<int>{0, 1} : plan->levels;
   for (int n : ns) {
     GridRun run;
     run.n = n;
     run.label = "N=" + std::to_string(n) + " (" + std::to_string(n) + "x" + std::to_string(2 * n) + ")";
     try {
       const auto t0 = std::chrono::steady_clock::now();
-      const Grid g(Geometry::Axisymmetric, n, 2 * n, 0.0, 0.5, 0.0, 1.0);
+      const Grid g = make_grid(plan, n, Geometry::Axisymmetric, n, 2 * n, 0.0, 0.5, 0.0, 1.0);
+      if (plan) run.label = "level " + std::to_string(n) + " (" + std::to_string(g.nr) + "x" + std::to_string(g.nz) + ")";
       interface::Vof vof(g);
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) {
@@ -232,16 +239,22 @@ double water_below_surface(double r0, double r1, double z0, double z1,
 
 }  // namespace
 
-TestReport run_2c(bool quick, bool limiter) {
+TestReport run_2c(bool quick, bool limiter, const GridPlan* plan) {
   TestReport rep = p3_report("2-C", "Axisymmetric standing wave in a circular tank with an air layer");
   mark_limiter(rep, limiter);
+  if (plan) {  // 늘어나는 격자 시험 (03 §1.4 S 시험, 기준 d753d5a, 격자 조건 변경 acd6130)
+    rep.id = plan->id;
+    rep.title += " on stretched grids";
+    rep.criteria_commit = "acd6130";
+  }
   const double R = 1.0, h = 0.5, hp = 0.5, eps = 0.002, g0 = 9.81, rho_w = 1000.0, rho_a = 1.2;
   const double k = first_zero_j1() / R;
   // Lamb (1932) Art. 231 (11) + Art. 191·257: σ² = gk(ρ − ρ′)/(ρ coth kh + ρ′ coth kh′)
   const double sigma = std::sqrt(g0 * k * (rho_w - rho_a) /
                                  (rho_w / std::tanh(k * h) + rho_a / std::tanh(k * hp)));
   const double period = 2.0 * kPi / sigma;
-  const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{16, 32, 64, 128};
+  std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{16, 32, 64, 128};
+  if (plan) ns = quick ? std::vector<int>{0, 1} : plan->levels;
   for (int n : ns) {
     GridRun run;
     run.n = n;
@@ -249,7 +262,8 @@ TestReport run_2c(bool quick, bool limiter) {
     try {
       const auto t0 = std::chrono::steady_clock::now();
       flow::Problem pb;
-      pb.grid = Grid(Geometry::Axisymmetric, n, n, 0.0, R, 0.0, h + hp);
+      pb.grid = make_grid(plan, n, Geometry::Axisymmetric, n, n, 0.0, R, 0.0, h + hp);
+      if (plan) run.label = "level " + std::to_string(n) + " (" + std::to_string(pb.grid.nr) + "x" + std::to_string(pb.grid.nz) + ")";
       pb.bc.r_min.kind = flow::BoundaryKind::Axis;
       pb.gravity = {0.0, -g0};
       const Grid g = pb.grid;
@@ -262,7 +276,8 @@ TestReport run_2c(bool quick, bool limiter) {
         }
       }
       auto mat = std::make_shared<interface::VofMaterial>(rho_w, 0.0, rho_a, 0.0);
-      interface::TwoPhaseSolver s(pb, mat, f0, false, convection_options(limiter));
+      flow::SolverOptions opts = convection_options(limiter || plan);
+      interface::TwoPhaseSolver s(pb, mat, f0, false, opts);
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       const double v0 = s.vof().water_volume();
       // Δt = 0.25 Δ / √(g h)  (§1.3 이 정하지 않아 여기서 정함)
@@ -363,10 +378,16 @@ bool runs_ok(const std::vector<GridRun>& runs) {
 }  // namespace
 
 // ---------------------------------------------------------------- 2-A
-TestReport run_2a(bool quick, bool limiter) {
+TestReport run_2a(bool quick, bool limiter, const GridPlan* plan) {
   TestReport rep = p3_report("2-A", "Water-air rest state (interface inside a cell), 1000 steps");
   mark_limiter(rep, limiter);
-  const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{32, 64};
+  if (plan) {  // 늘어나는 격자 시험 (03 §1.4 S 시험, 기준 d753d5a, 격자 조건 변경 acd6130)
+    rep.id = plan->id;
+    rep.title += " on stretched grids";
+    rep.criteria_commit = "acd6130";
+  }
+  std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{32, 64};
+  if (plan) ns = quick ? std::vector<int>{0} : plan->levels;
   const int steps = quick ? 100 : 1000;
   for (Geometry geom : {Geometry::Planar, Geometry::Axisymmetric}) {
     for (int n : ns) {
@@ -378,7 +399,8 @@ TestReport run_2a(bool quick, bool limiter) {
         try {
           const auto t0 = std::chrono::steady_clock::now();
           flow::Problem pb;
-          pb.grid = Grid(geom, n, n, 0.0, 1.0, 0.0, 1.0);
+          pb.grid = make_grid(plan, n, geom, n, n, 0.0, 1.0, 0.0, 1.0);
+          if (plan) run.label += " level " + std::to_string(n);
           pb.bc.r_min.kind = geom == Geometry::Axisymmetric ? flow::BoundaryKind::Axis : flow::BoundaryKind::Wall;
           pb.gravity = {0.0, -kG};
           const Array2D f0 = flat_fraction(pb.grid, 0.5 + 0.3 * pb.grid.dzc(pb.grid.cell_z(0.5)));
@@ -389,7 +411,9 @@ TestReport run_2a(bool quick, bool limiter) {
             pb.air_kappa = 1.4;
           }
           auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
-          interface::TwoPhaseSolver s(pb, mat, f0, compressible, convection_options(limiter));
+          flow::SolverOptions opts = convection_options(limiter || plan);
+          if (plan) opts.time_order = 2;  // S 시험: BDF2 (반암시적 실행에만 적용)
+          interface::TwoPhaseSolver s(pb, mat, f0, compressible, opts);
           s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; },
                        !compressible);
           if (compressible) s.flow().set_pressure(p0);

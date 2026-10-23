@@ -64,6 +64,14 @@ Criterion order_at_least(const std::vector<GridRun>& runs, const std::string& ke
   return c;
 }
 
+flow::Grid make_grid(const GridPlan* plan, int level, flow::Geometry g, int nr, int nz, double r0, double r1, double z0,
+                     double z1) {
+  if (!plan) return flow::Grid(g, nr, nz, r0, r1, z0, z1);
+  const double h = plan->h0;
+  return flow::Grid::stretched(g, flow::stretched_faces(r0, r1, plan->rc0, plan->rc1, h, 1.05, 4.0 * h, level),
+                               flow::stretched_faces(z0, z1, plan->zc0, plan->zc1, h, 1.05, 4.0 * h, level));
+}
+
 void conclude(TestReport& rep, bool quick) {
   for (const auto& run : rep.runs) {
     if (!run.failure.empty()) {

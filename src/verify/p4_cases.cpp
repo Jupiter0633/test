@@ -17,6 +17,7 @@
 #include "body/shape.h"
 #include "interface/two_phase.h"
 #include "interface/vof_material.h"
+#include "verify/p3_cases.h"
 #include "verify/report_util.h"
 
 namespace hcw::verify {
@@ -863,9 +864,15 @@ TestReport run_3f(bool quick) {
 }
 
 // ---------------------------------------------------------------- 3-G
-TestReport run_3g(bool quick) {
+TestReport run_3g(bool quick, const GridPlan* plan) {
   TestReport rep = p4_report("3-G", "Static buoyancy of a submerged closed cylinder");
-  const std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{16, 32};
+  if (plan) {  // 늘어나는 격자 (S-5, 03 §1.4, 격자 조건 변경 acd6130)
+    rep.id = plan->id;
+    rep.title += " on stretched grids";
+    rep.criteria_commit = "acd6130";
+  }
+  std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{16, 32};
+  if (plan) ns = quick ? std::vector<int>{0} : plan->levels;
   const int steps = quick ? 20 : 200;
   const double buoy = kRhoW * kG * kPi * kA * kA * 2.0 * kA;
   for (int n : ns) {
@@ -875,8 +882,10 @@ TestReport run_3g(bool quick) {
     const auto t0 = std::chrono::steady_clock::now();
     try {
       flow::Problem pb;
-      pb.grid = Grid(Geometry::Axisymmetric, 3 * n, static_cast<int>(std::lround(6.5 * n)), 0.0, 3.0 * kA, -5.0 * kA,
-                     1.5 * kA);
+      pb.grid = make_grid(plan, n, Geometry::Axisymmetric, 3 * n, static_cast<int>(std::lround(6.5 * n)), 0.0, 3.0 * kA,
+                          -5.0 * kA, 1.5 * kA);
+      if (plan) run.label = "level " + std::to_string(n) + " (" + std::to_string(pb.grid.nr) + "x" +
+                            std::to_string(pb.grid.nz) + ")";
       pb.bc.r_min.kind = flow::BoundaryKind::Axis;
       pb.gravity = {0.0, -kG};
       const Grid g = pb.grid;
@@ -940,6 +949,63 @@ TestReport run_3g(bool quick) {
   rep.notes.push_back("closed cylinder radius a, height 2a, top at depth a; buoyancy = rho_w g pi a^2 (2a) = " +
                       fmt(buoy) + " N; still water from the discrete hydrostatic pressure + 1e5 Pa, dt = 0.1 dx / "
                       "sqrt(g a), " + std::to_string(steps) + " steps; max speed is report only");
+  conclude(rep, quick);
+  return rep;
+}
+
+// ---------------------------------------------------------------- S-1 – S-5
+// 늘어나는 격자 시험 (03 §1.4, 기준 d753d5a, 격자 조건 변경 acd6130). 기존 시험을 격자 계획만 바꿔 다시 실행한다.
+// core 는 문서 그대로 (S-2 는 "물방울이 지나가는 구역", S-5 는 "원통 둘레" 를 아래 값으로 정함).
+GridPlan s_plan(const std::string& id) {
+  GridPlan p;
+  p.id = id;
+  if (id == "S-1") p = {id, 0.3, 0.6, 0.4, 0.7, 1.0 / 32.0, {0, 1, 2, 3}};
+  else if (id == "S-2") p = {id, 0.0, 0.4, 0.1, 0.9, 0.5 / 32.0, {0, 1, 2, 3}};       // 2-B 가장 거친 격자 간격
+  else if (id == "S-3") p = {id, 0.0, 1.0, 0.4, 0.6, 1.0 / 32.0, {0, 1}};
+  else if (id == "S-4") p = {id, 0.0, 1.0, 0.5 - 0.1, 0.5 + 0.1, 1.0 / 16.0, {0, 1, 2, 3}};  // 2-C: R = 1, h = 0.5
+  else if (id == "S-5") p = {id, 0.0, 1.25 * kA, -3.25 * kA, -0.75 * kA, kA / 16.0, {0, 1}};  // 원통 r ≤ a, −3a ≤ z ≤ −a
+  else throw std::invalid_argument("unknown stretched-grid test " + id);
+  return p;
+}
+
+TestReport run_s(const std::string& id, bool quick) {
+  const GridPlan plan = s_plan(id);
+  if (id == "S-2") return run_2b(quick, &plan);
+  if (id == "S-3") return run_2a(quick, false, &plan);
+  if (id == "S-4") return run_2c(quick, false, &plan);
+  if (id == "S-5") return run_3g(quick, &plan);
+  // S-1: 1-A(b) 제조해, 기준은 §1.1 1-A 그대로
+  TestReport rep;
+  rep.id = id;
+  rep.title = "MMS axisymmetric, variable density (1-10) and viscosity, on stretched grids";
+  rep.phase = "P4";
+  rep.criteria_section = "1.4 (S-1 = 1.1 1-A)";
+  rep.criteria_commit = "acd6130";
+  const std::vector<int> levels = quick ? std::vector<int>{0, 1} : plan.levels;
+  for (int L : levels) {
+    try {
+      GridRun r = run_1a_grid_plan(plan, L, true);
+      r.label = "level " + std::to_string(L);
+      rep.runs.push_back(r);
+    } catch (const std::exception& e) {
+      GridRun r;
+      r.n = L;
+      r.label = "level " + std::to_string(L);
+      r.failure = std::string("FAILED_EXCEPTION ") + e.what();
+      rep.runs.push_back(r);
+    }
+  }
+  if (runs_ok(rep.runs)) {
+    for (const char* k : {"velocity_L2", "velocity_Linf", "pressure_L2", "pressure_Linf"}) {
+      rep.criteria.push_back(monotone(rep.runs, k));
+    }
+    rep.criteria.push_back(order_at_least(rep.runs, "velocity_L2", 1.7));
+    rep.criteria.push_back(order_at_least(rep.runs, "velocity_Linf", 1.7));
+    rep.criteria.push_back(order_at_least(rep.runs, "pressure_L2", 1.7));
+    rep.criteria.push_back(order_at_least(rep.runs, "pressure_Linf", 1.5));
+  }
+  rep.notes.push_back("core r in [0.3, 0.6], z in [0.4, 0.7], core size 1/32 at level 0, neighbour ratio <= 1.05, "
+                      "max size 4 x core; each level doubles the cells along the smooth mapping");
   conclude(rep, quick);
   return rep;
 }

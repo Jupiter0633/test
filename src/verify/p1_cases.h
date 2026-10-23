@@ -49,6 +49,9 @@ TestReport run_1d(bool quick);
 // run_1a_grid 는 예외를 그대로 던진다.
 GridRun run_1a_grid(int n, bool variable_density, flow::Convection convection);
 GridRun run_1c_grid(int n, flow::Convection convection);
+// 늘어나는 격자의 1-A 한 격자 (S-1, 03 §1.4). level 은 세분 단계.
+struct GridPlan;
+GridRun run_1a_grid_plan(const GridPlan& plan, int level, bool variable_density);
 
 // p_obs = ln(e_coarse / e_fine) / ln 2
 double observed_order(double e_coarse, double e_fine);

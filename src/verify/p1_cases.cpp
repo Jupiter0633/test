@@ -130,14 +130,14 @@ std::array<double, 2> mms_source(const MmsSpace& s, double r, double t, bool var
   return {u_t + conv_u + (p.r - div_tau_r) / rho, w_t + conv_w + (p.z - div_tau_z) / rho};
 }
 
-GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv) {
+GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv, const GridPlan* plan = nullptr) {
   GridRun run;
   run.n = n;
   run.label = "N=" + std::to_string(n);
   const auto t0 = std::chrono::steady_clock::now();
 
   Problem pb;
-  pb.grid = Grid(Geometry::Axisymmetric, n, n, 0.0, 1.0, 0.0, 1.0);
+  pb.grid = make_grid(plan, n, Geometry::Axisymmetric, n, n, 0.0, 1.0, 0.0, 1.0);
   const Grid g = pb.grid;
   pb.bc.r_min.kind = BoundaryKind::Axis;
   pb.bc.r_max.kind = BoundaryKind::Wall;
@@ -218,6 +218,10 @@ GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv) {
 
 GridRun run_1a_grid(int n, bool variable, flow::Convection conv) {
   return run_1a_grid_impl(n, variable, conv);
+}
+
+GridRun run_1a_grid_plan(const GridPlan& plan, int level, bool variable) {
+  return run_1a_grid_impl(level, variable, flow::Convection::Central, &plan);
 }
 
 double observed_order(double e_coarse, double e_fine) {

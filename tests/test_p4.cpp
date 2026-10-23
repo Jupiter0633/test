@@ -127,9 +127,47 @@ void test_gci() {
   expect(!verify::gci_fine(1.0, 1.1, 1.05, gci, p), "oscillatory convergence is refused");
 }
 
+// 늘어나는 격자 칸 경계: 끝점 정확, 단조 증가, core 안 등간격 h, 이웃 크기 비 ≤ 1.05 (가장 거친 격자),
+// 세분하면 core 칸이 정확히 절반, 원래 경계를 그대로 포함
+void test_stretched_faces() {
+  const double h = 1.0 / 32.0;
+  const auto f0 = flow::stretched_faces(0.0, 1.0, 0.3, 0.6, h, 1.05, 4.0 * h, 0);
+  const auto f1 = flow::stretched_faces(0.0, 1.0, 0.3, 0.6, h, 1.05, 4.0 * h, 1);
+  expect(f0.front() == 0.0 && f0.back() == 1.0 && f1.front() == 0.0 && f1.back() == 1.0, "stretched endpoints exact");
+  expect(f1.size() == 2 * (f0.size() - 1) + 1, "refinement doubles the cells");
+  bool mono = true, core = true, ratio = true, nested = true;
+  double worst = 1.0;
+  for (std::size_t k = 1; k < f0.size(); ++k) {
+    const double d = f0[k] - f0[k - 1];
+    mono = mono && d > 0.0;
+    const double mid = 0.5 * (f0[k] + f0[k - 1]);
+    if (mid > 0.3 && mid < 0.6) core = core && std::abs(d - h) < 1e-12;  // core 는 [0.284375, 0.615625] 로 넓어짐
+    if (k > 1) worst = std::max(worst, std::max(d / (f0[k - 1] - f0[k - 2]), (f0[k - 1] - f0[k - 2]) / d));
+    nested = nested && std::abs(f1[2 * k] - f0[k]) < 1e-14;
+  }
+  ratio = worst <= 1.05 + 1e-9;
+  for (std::size_t k = 1; k < f1.size(); ++k) {
+    const double mid = 0.5 * (f1[k] + f1[k - 1]);
+    // core 끝 칸은 PCHIP 기울기가 바깥 칸에 섞이므로 core 안쪽만 본다
+    if (mid > 0.3 + h && mid < 0.6 - h) core = core && std::abs(f1[k] - f1[k - 1] - 0.5 * h) < 1e-12;
+  }
+  expect(mono, "stretched faces increase");
+  expect(core, "core spacing exact on base and refined grids");
+  expect(ratio, "neighbour ratio <= 1.05 on the base grid (" + std::to_string(worst) + ")");
+  expect(nested, "refined grid contains the base faces");
+  // 축대칭 셀 체적 합 = π (r1² − r0²)(z1 − z0) / (2π)
+  const auto g = Grid::stretched(Geometry::Axisymmetric, f0, flow::stretched_faces(-1.0, 0.5, -0.2, 0.1, h, 1.05, 4 * h, 1));
+  double vol = 0.0;
+  for (int i = 0; i < g.nr; ++i) {
+    for (int j = 0; j < g.nz; ++j) vol += g.cell_volume(i, j);
+  }
+  expect(std::abs(vol - 0.5 * 1.5) < 1e-12, "stretched axisymmetric cell volumes sum to the domain");
+}
+
 }  // namespace
 
 int main() {
+  test_stretched_faces();
   test_fluid_fraction_cylinder();
   test_wedge_shape();
   test_combined_flux_divergence_free();

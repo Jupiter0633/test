@@ -14,7 +14,10 @@ TestReport run_3b(bool quick);
 TestReport run_3c(bool quick);
 TestReport run_3e(bool quick);
 TestReport run_3f(bool quick);
-TestReport run_3g(bool quick);
+// plan 이 있으면 늘어나는 격자 (S-5)
+TestReport run_3g(bool quick, const GridPlan* plan = nullptr);
+// 늘어나는 격자 시험 S-1 – S-5 (03 §1.4). id: "S-1" … "S-5"
+TestReport run_s(const std::string& id, bool quick);
 TestReport run_3i(bool quick);
 
 // 개발용 (판정 아님, 결과 저장 안 함): 3-B 조건 원판 입수를 a/Δ = n, Δt 규칙 × dt_factor 로 계산한다.

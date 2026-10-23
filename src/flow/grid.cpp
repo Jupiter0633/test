@@ -74,24 +74,39 @@ int Grid::face_z(double z) const { return uniform_ ? uniform_face(z, z0, hz_) : 
 namespace {
 
 // 한쪽 바깥 구간 (길이 len) 의 칸 크기: h_core·ratio^k (상한 h_max) 를 합이 len 에 가장 가깝게 고른 뒤 비례로 맞춘다
+// core 바깥 길이 len 을 채우는 칸 크기 (core 쪽부터). k 번째 칸 = min(h_max, h_core q^k).
+// 칸 수 N 은 q = ratio 로 len 에 닿는 가장 작은 수, q 는 [1/ratio, ratio] 에서 이분법으로 합이 len 이 되게 정한다
+// (이웃 크기 비 ≤ ratio 유지). len 이 너무 짧아 q = 1/ratio 로도 넘치면 그때만 비례로 줄인다.
 std::vector<double> outer_sizes(double len, double h_core, double ratio, double h_max) {
   std::vector<double> h;
   if (len <= 0.0) return h;
-  double sum = 0.0, size = h_core;
-  while (true) {
-    size = std::min(h_max, size * ratio);
-    if (sum + size > len) {
-      if (sum + size - len < len - sum || h.empty()) {
-        h.push_back(size);
-        sum += size;
-      }
-      break;
+  auto fill = [&](double q, int n) {
+    std::vector<double> v(static_cast<std::size_t>(n));
+    double size = h_core, sum = 0.0;
+    for (int k = 0; k < n; ++k) {
+      size = std::min(h_max, size * q);
+      v[static_cast<std::size_t>(k)] = size;
+      sum += size;
     }
-    h.push_back(size);
+    return std::make_pair(v, sum);
+  };
+  int n = 0;
+  for (double size = h_core, sum = 0.0; sum < len; ++n) {
+    size = std::min(h_max, size * ratio);
     sum += size;
   }
-  for (double& v : h) v *= len / sum;
-  return h;
+  double lo_q = 1.0 / ratio, hi_q = ratio;
+  if (fill(lo_q, n).second > len) {
+    hi_q = lo_q;
+  } else {
+    for (int it = 0; it < 200; ++it) {
+      const double mid = 0.5 * (lo_q + hi_q);
+      (fill(mid, n).second > len ? hi_q : lo_q) = mid;
+    }
+  }
+  auto [v, sum] = fill(hi_q, n);
+  for (double& x : v) x *= len / sum;
+  return v;
 }
 
 // 단조 3 차 Hermite 보간 (Fritsch–Carlson). x 는 균일 매개변수 s_k = k/N 의 값.
@@ -122,7 +137,20 @@ std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, 
   if (!(lo <= c0 && c0 < c1 && c1 <= hi) || !(h_core > 0.0) || !(ratio >= 1.0) || !(h_max >= h_core)) {
     throw std::invalid_argument("stretched_faces: bad arguments");
   }
-  const int n_core = std::max(1, static_cast<int>(std::lround((c1 - c0) / h_core)));
+  // core 칸 크기는 정확히 h_core: 칸 수를 올림하고 core 를 양쪽으로 고르게 넓힌다 (영역 안으로 밀어 넣음)
+  int n_core = std::max(1, static_cast<int>(std::ceil((c1 - c0) / h_core - 1e-9)));
+  const int n_fit = static_cast<int>(std::floor((hi - lo) / h_core + 1e-9));
+  if (n_core >= n_fit) {  // 영역 전체가 core
+    n_core = std::max(1, static_cast<int>(std::lround((hi - lo) / h_core)));
+    c0 = lo;
+    c1 = hi;
+  } else {
+    const double grow = 0.5 * (n_core * h_core - (c1 - c0));
+    c0 -= grow;
+    c1 += grow;
+    if (c0 < lo) c1 += lo - c0, c0 = lo;
+    if (c1 > hi) c0 -= c1 - hi, c1 = hi;
+  }
   const double hc = (c1 - c0) / n_core;
   std::vector<double> below = outer_sizes(c0 - lo, hc, ratio, h_max);
   std::vector<double> above = outer_sizes(hi - c1, hc, ratio, h_max);
