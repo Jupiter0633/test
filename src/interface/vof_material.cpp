@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "common/parallel.h"
 #include "interface/plic.h"
 
 namespace hcw::interface {
@@ -17,17 +18,19 @@ struct HalfWater {
   flow::Array2D nr, nz, alpha;
   HalfWater(const flow::Grid& grid, const flow::Array2D& frac)
       : g(grid), f(frac), nr(grid.nr, grid.nz), nz(grid.nr, grid.nz), alpha(grid.nr, grid.nz) {
-    for (int i = 0; i < g.nr; ++i) {
-      for (int j = 0; j < g.nz; ++j) {
-        const double fc = f(i, j);
-        if (fc <= kEmpty || fc >= 1.0 - kEmpty) continue;
-        const auto n = youngs_normal(g, f, i, j);
-        nr(i, j) = n[0];
-        nz(i, j) = n[1];
-        alpha(i, j) = solve_alpha(rectangle(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1)), n,
-                                  fc * g.cell_volume(i), g.geometry);
+    parallel::parallel_for(0, g.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
+      for (int i = i_lo; i < i_hi; ++i) {
+        for (int j = 0; j < g.nz; ++j) {
+          const double fc = f(i, j);
+          if (fc <= kEmpty || fc >= 1.0 - kEmpty) continue;
+          const auto n = youngs_normal(g, f, i, j);
+          nr(i, j) = n[0];
+          nz(i, j) = n[1];
+          alpha(i, j) = solve_alpha(rectangle(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1)), n,
+                                    fc * g.cell_volume(i), g.geometry);
+        }
       }
-    }
+    });
   }
   double operator()(int i, int j, double r0, double r1, double z0, double z1) const {
     const Polygon half = rectangle(r0, r1, z0, z1);
@@ -51,39 +54,43 @@ Fractions fractions_from_vof(const flow::Grid& g, const flow::Array2D& f) {
     return polygon_volume(rectangle(r0, r1, z0, z1), g.geometry);
   };
   // r 면 i: 셀 i−1 의 오른쪽 반 + 셀 i 의 왼쪽 반
-  for (int i = 0; i <= g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) {
-      const double z0 = g.zf(j), z1 = g.zf(j + 1);
-      double w = 0.0, v = 0.0;
-      if (i > 0) {
-        const double rm = g.rc(i - 1);
-        w += water(i - 1, j, rm, g.rf(i), z0, z1);
-        v += vol(rm, g.rf(i), z0, z1);
+  parallel::parallel_for(0, g.nr + 1, parallel::kRowGrain, [&](int i_lo, int i_hi) {
+    for (int i = i_lo; i < i_hi; ++i) {
+      for (int j = 0; j < g.nz; ++j) {
+        const double z0 = g.zf(j), z1 = g.zf(j + 1);
+        double w = 0.0, v = 0.0;
+        if (i > 0) {
+          const double rm = g.rc(i - 1);
+          w += water(i - 1, j, rm, g.rf(i), z0, z1);
+          v += vol(rm, g.rf(i), z0, z1);
+        }
+        if (i < g.nr) {
+          const double rm = g.rc(i);
+          w += water(i, j, g.rf(i), rm, z0, z1);
+          v += vol(g.rf(i), rm, z0, z1);
+        }
+        fr.face_u(i, j) = v > 0.0 ? std::clamp(w / v, 0.0, 1.0) : f(std::min(i, g.nr - 1), j);
       }
-      if (i < g.nr) {
-        const double rm = g.rc(i);
-        w += water(i, j, g.rf(i), rm, z0, z1);
-        v += vol(g.rf(i), rm, z0, z1);
-      }
-      fr.face_u(i, j) = v > 0.0 ? std::clamp(w / v, 0.0, 1.0) : f(std::min(i, g.nr - 1), j);
     }
-  }
+  });
   // z 면 j: 셀 j−1 의 위쪽 반 + 셀 j 의 아래쪽 반
-  for (int i = 0; i < g.nr; ++i) {
-    const double r0 = g.rf(i), r1 = g.rf(i + 1);
-    for (int j = 0; j <= g.nz; ++j) {
-      double w = 0.0, v = 0.0;
-      if (j > 0) {
-        w += water(i, j - 1, r0, r1, g.zc(j - 1), g.zf(j));
-        v += vol(r0, r1, g.zc(j - 1), g.zf(j));
+  parallel::parallel_for(0, g.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
+    for (int i = i_lo; i < i_hi; ++i) {
+      const double r0 = g.rf(i), r1 = g.rf(i + 1);
+      for (int j = 0; j <= g.nz; ++j) {
+        double w = 0.0, v = 0.0;
+        if (j > 0) {
+          w += water(i, j - 1, r0, r1, g.zc(j - 1), g.zf(j));
+          v += vol(r0, r1, g.zc(j - 1), g.zf(j));
+        }
+        if (j < g.nz) {
+          w += water(i, j, r0, r1, g.zf(j), g.zc(j));
+          v += vol(r0, r1, g.zf(j), g.zc(j));
+        }
+        fr.face_w(i, j) = std::clamp(w / v, 0.0, 1.0);
       }
-      if (j < g.nz) {
-        w += water(i, j, r0, r1, g.zf(j), g.zc(j));
-        v += vol(r0, r1, g.zf(j), g.zc(j));
-      }
-      fr.face_w(i, j) = std::clamp(w / v, 0.0, 1.0);
     }
-  }
+  });
   auto cf = [&](int i, int j) {
     return f(std::clamp(i, 0, g.nr - 1), std::clamp(j, 0, g.nz - 1));
   };

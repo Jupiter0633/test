@@ -34,6 +34,7 @@ struct RunMetadata {
   std::string machine;
   MachineRole machine_role = MachineRole::Unregistered;
   unsigned hardware_threads = 0;
+  int solver_threads = 1;  // 계산 스레드 수 (HCW_THREADS). 결과는 스레드 수와 상관없이 같다.
   BuildInfo build;
   LoadedCase input;
   LockState lock = LockState::Missing;

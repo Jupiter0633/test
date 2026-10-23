@@ -37,6 +37,10 @@ add_custom_target(hcw_build_info
   BYPRODUCTS ${HCW_BUILD_INFO_HEADER}
   COMMENT "Recording git commit for run metadata")
 
+# 다중 스레드 실행 (선택, 기본 1). 결과는 스레드 수와 상관없이 같다 (src/common/parallel.h).
+add_library(hcw_parallel STATIC src/common/parallel.cpp)
+target_include_directories(hcw_parallel PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
 add_library(hcw_core STATIC
   src/common/sha256.cpp
   src/common/text.cpp
@@ -52,6 +56,7 @@ target_compile_definitions(hcw_core PRIVATE
   HCW_BUILD_CONFIG="$<CONFIG>"
   HCW_VERSION="${PROJECT_VERSION}")
 add_dependencies(hcw_core hcw_build_info)
+target_link_libraries(hcw_core PUBLIC hcw_parallel)
 # 순서 의존만으로는 Ninja 가 헤더 내용이 바뀐 빌드에서 run_metadata 를 다시 컴파일하지 않을 수 있다
 # (2026-10-22 확인: 작업 트리가 바뀐 뒤 첫 빌드가 "clean" 으로 기록됨). 명시적 의존을 건다.
 set_source_files_properties(src/io/run_metadata.cpp PROPERTIES OBJECT_DEPENDS ${HCW_BUILD_INFO_HEADER})
@@ -74,6 +79,7 @@ add_library(hcw_flow STATIC
   src/interface/vof_material.cpp
   src/interface/two_phase.cpp)
 target_include_directories(hcw_flow PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(hcw_flow PUBLIC hcw_parallel)
 
 # 검증 시험 (docs/design/03_verification_plan.md §1.1 P1, §1.2 P2)
 add_library(hcw_verify_cases STATIC

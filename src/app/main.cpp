@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "common/parallel.h"
 #include "common/text.h"
 #include "io/case_policy.h"
 #include "io/run_metadata.h"
@@ -117,6 +118,15 @@ int cmd_prepare(const std::string& case_arg, const std::string& output_arg) {
   meta.created_utc = utc_now_iso();
   meta.machine = current_machine_name();
   meta.hardware_threads = std::thread::hardware_concurrency();
+  {
+    std::string thread_error;
+    const int n = parallel::threads_from_environment(thread_error);
+    if (n < 1) {
+      std::cerr << "error: " << thread_error << "\n";
+      return kInvalidInput;
+    }
+    meta.solver_threads = n;
+  }
   meta.build = current_build_info();
   meta.input = ctx.input;
 

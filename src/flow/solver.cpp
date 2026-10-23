@@ -2,10 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
+#include <array>
 #include <stdexcept>
 #include <utility>
 
+#include "common/parallel.h"
 #include "flow/linear.h"
 
 namespace hcw::flow {
@@ -15,6 +16,29 @@ std::array<double, 2> wall_velocity(const Boundary& b, double r, double z, doubl
   if (!b.velocity) return {0.0, 0.0};
   return b.velocity(r, z, t);
 }
+
+// 압력 행렬 한 행 (열 번호 오름차순, 최대 kMax 개). 예전의 std::map<int, double> 과 같은 값을
+// (같은 칸에 같은 순서로 더하므로 비트 단위로 같게) 힙 할당 없이 만든다.
+struct SparseRow {
+  static constexpr int kMax = 8;
+  int n = 0;
+  std::array<int, kMax> col{};
+  std::array<double, kMax> val{};
+  double& operator[](int c) {
+    int k = 0;
+    while (k < n && col[k] < c) ++k;
+    if (k < n && col[k] == c) return val[k];
+    if (n == kMax) throw std::logic_error("pressure matrix: too many entries in a row");
+    for (int q = n; q > k; --q) {
+      col[q] = col[q - 1];
+      val[q] = val[q - 1];
+    }
+    col[k] = c;
+    val[k] = 0.0;
+    ++n;
+    return val[k];
+  }
+};
 
 void remove_mean(std::vector<double>& b) {
   double s = 0.0;
@@ -181,7 +205,7 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op,
                                 const body::CutGeometry& gm) const {
   const Grid& g = p_.grid;
   const int n = g.nr * g.nz;
-  std::vector<std::map<int, double>> rows(static_cast<std::size_t>(n));
+  std::vector<SparseRow> rows(static_cast<std::size_t>(n));
   auto cell = [&](int i, int j) { return wrap_r(i) * g.nz + wrap_z(j); };
   auto couple = [&](int a, int b, double coef) {
     rows[a][a] += coef;
@@ -230,13 +254,13 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op,
   a.col.clear();
   a.val.clear();
   for (int r = 0; r < n; ++r) {
-    for (const auto& [c, v] : rows[r]) {
-      a.col.push_back(c);
-      a.val.push_back(v);
+    for (int k = 0; k < rows[r].n; ++k) {
+      a.col.push_back(rows[r].col[k]);
+      a.val.push_back(rows[r].val[k]);
     }
     a.row_start[r + 1] = static_cast<int>(a.col.size());
   }
-  op.preconditioner.factor(a);
+  op.preconditioner.factor(a, g.nz);  // 셀 순서 c = i·nz + j (다중 스레드 삼각 풀이용)
 }
 
 void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw, double body_rate,
@@ -420,153 +444,158 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
   };
 
   // r 방향 운동량 (r 면)
-  for (int i = iu_lo_; i < iu_hi_; ++i) {
-    const double m_f = g.metric(g.rf(i));
-    const double m_l = g.metric(g.rc(i - 1));
-    const double m_r = g.metric(g.rc(i));
-    for (int j = 0; j < g.nz; ++j) {
-      const double u_l = 0.5 * (U(u, i - 1, j, t) + U(u, i, j, t));
-      const double u_r = 0.5 * (U(u, i, j, t) + U(u, i + 1, j, t));
-      double conv_r, conv_z;
-      if (consistent) {
-        // r 면 (셀 c 중심): 면 c 와 c+1 사이. z 면 (꼭짓점 fj): u 면 fj−1 과 fj 사이.
-        auto r_face = [&](int c, double a, double coef) {
-          const bool hm = u_r_ok(c - 1), hp = u_r_ok(c + 2);
-          return Face{coef, a,
-                      upwind(a, RU(c - 1, j), hm, RU(c, j), RU(c + 1, j), RU(c + 2, j), hp),
-                      a >= 0.0 ? RU(c, j) : RU(c + 1, j),
-                      upwind(a, hm ? U(u, c - 1, j, t) : 0.0, hm, U(u, c, j, t), U(u, c + 1, j, t),
-                             hp ? U(u, c + 2, j, t) : 0.0, hp)};
+  // 면마다 따로 계산하므로 r 열(i) 단위로 스레드에 나눠도 결과가 같다.
+  parallel::parallel_for(iu_lo_, iu_hi_, parallel::kRowGrain, [&](int i_lo, int i_hi) {
+    for (int i = i_lo; i < i_hi; ++i) {
+      const double m_f = g.metric(g.rf(i));
+      const double m_l = g.metric(g.rc(i - 1));
+      const double m_r = g.metric(g.rc(i));
+      for (int j = 0; j < g.nz; ++j) {
+        const double u_l = 0.5 * (U(u, i - 1, j, t) + U(u, i, j, t));
+        const double u_r = 0.5 * (U(u, i, j, t) + U(u, i + 1, j, t));
+        double conv_r, conv_z;
+        if (consistent) {
+          // r 면 (셀 c 중심): 면 c 와 c+1 사이. z 면 (꼭짓점 fj): u 면 fj−1 과 fj 사이.
+          auto r_face = [&](int c, double a, double coef) {
+            const bool hm = u_r_ok(c - 1), hp = u_r_ok(c + 2);
+            return Face{coef, a,
+                        upwind(a, RU(c - 1, j), hm, RU(c, j), RU(c + 1, j), RU(c + 2, j), hp),
+                        a >= 0.0 ? RU(c, j) : RU(c + 1, j),
+                        upwind(a, hm ? U(u, c - 1, j, t) : 0.0, hm, U(u, c, j, t), U(u, c + 1, j, t),
+                               hp ? U(u, c + 2, j, t) : 0.0, hp)};
+          };
+          auto z_face = [&](int fj, double coef) {
+            const double a = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+            const bool hm = u_z_ok(fj - 2), hp = u_z_ok(fj + 1);
+            return Face{coef, a,
+                        upwind(a, RU(i, fj - 2), hm, RU(i, fj - 1), RU(i, fj), RU(i, fj + 1), hp),
+                        a >= 0.0 ? RU(i, fj - 1) : RU(i, fj),
+                        upwind(a, hm ? U(u, i, fj - 2, t) : 0.0, hm, U(u, i, fj - 1, t), U(u, i, fj, t),
+                               hp ? U(u, i, fj + 1, t) : 0.0, hp)};
+          };
+          const Face f[4] = {r_face(i, u_r, m_r / (m_f * g.dr)), r_face(i - 1, u_l, -m_l / (m_f * g.dr)),
+                             z_face(j + 1, 1.0 / g.dz), z_face(j, -1.0 / g.dz)};
+          conv_r = consistent_accel(f, m.rho_u(i, j), u(i, j));
+          conv_z = 0.0;
+        } else if (!limited) {
+          conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
+          auto flux_z = [&](int fj) {
+            const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
+            const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+            return uc * wc;
+          };
+          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+        } else {
+          // 셀 c (면 c 와 c+1 사이) 의 r 플럭스: 이동 속도 = 중심 평균, 수송 u = 제한 보간
+          auto flux_r = [&](int c, double a) {
+            const double q = upwind(a, u_r_ok(c - 1) ? U(u, c - 1, j, t) : 0.0, u_r_ok(c - 1),
+                                    U(u, c, j, t), U(u, c + 1, j, t),
+                                    u_r_ok(c + 2) ? U(u, c + 2, j, t) : 0.0, u_r_ok(c + 2));
+            return a * q;
+          };
+          conv_r = (m_r * flux_r(i, u_r) - m_l * flux_r(i - 1, u_l)) / (m_f * g.dr);
+          auto flux_z = [&](int fj) {
+            const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+            const double q = upwind(wc, u_z_ok(fj - 2) ? U(u, i, fj - 2, t) : 0.0, u_z_ok(fj - 2),
+                                    U(u, i, fj - 1, t), U(u, i, fj, t),
+                                    u_z_ok(fj + 1) ? U(u, i, fj + 1, t) : 0.0, u_z_ok(fj + 1));
+            return q * wc;
+          };
+          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+        }
+
+        auto tau_rr = [&](int c) {
+          return 2.0 * m.mu_cell(wrap_r(c), j) * (U(u, c + 1, j, t) - U(u, c, j, t)) / g.dr;
         };
-        auto z_face = [&](int fj, double coef) {
-          const double a = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
-          const bool hm = u_z_ok(fj - 2), hp = u_z_ok(fj + 1);
-          return Face{coef, a,
-                      upwind(a, RU(i, fj - 2), hm, RU(i, fj - 1), RU(i, fj), RU(i, fj + 1), hp),
-                      a >= 0.0 ? RU(i, fj - 1) : RU(i, fj),
-                      upwind(a, hm ? U(u, i, fj - 2, t) : 0.0, hm, U(u, i, fj - 1, t), U(u, i, fj, t),
-                             hp ? U(u, i, fj + 1, t) : 0.0, hp)};
-        };
-        const Face f[4] = {r_face(i, u_r, m_r / (m_f * g.dr)), r_face(i - 1, u_l, -m_l / (m_f * g.dr)),
-                           z_face(j + 1, 1.0 / g.dz), z_face(j, -1.0 / g.dz)};
-        conv_r = consistent_accel(f, m.rho_u(i, j), u(i, j));
-        conv_z = 0.0;
-      } else if (!limited) {
-        conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
-        auto flux_z = [&](int fj) {
-          const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
-          const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
-          return uc * wc;
-        };
-        conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
-      } else {
-        // 셀 c (면 c 와 c+1 사이) 의 r 플럭스: 이동 속도 = 중심 평균, 수송 u = 제한 보간
-        auto flux_r = [&](int c, double a) {
-          const double q = upwind(a, u_r_ok(c - 1) ? U(u, c - 1, j, t) : 0.0, u_r_ok(c - 1),
-                                  U(u, c, j, t), U(u, c + 1, j, t),
-                                  u_r_ok(c + 2) ? U(u, c + 2, j, t) : 0.0, u_r_ok(c + 2));
-          return a * q;
-        };
-        conv_r = (m_r * flux_r(i, u_r) - m_l * flux_r(i - 1, u_l)) / (m_f * g.dr);
-        auto flux_z = [&](int fj) {
-          const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
-          const double q = upwind(wc, u_z_ok(fj - 2) ? U(u, i, fj - 2, t) : 0.0, u_z_ok(fj - 2),
-                                  U(u, i, fj - 1, t), U(u, i, fj, t),
-                                  u_z_ok(fj + 1) ? U(u, i, fj + 1, t) : 0.0, u_z_ok(fj + 1));
-          return q * wc;
-        };
-        conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+        const double visc_r = (m_r * tau_rr(i) - m_l * tau_rr(i - 1)) / (m_f * g.dr);
+        const double visc_z = (tau_rz(i, j + 1) - tau_rz(i, j)) / g.dz;
+        const double r_f = g.rf(i);
+        const double hoop = axisym ? -2.0 * m.mu_u(i, j) * u(i, j) / (r_f * r_f) : 0.0;
+
+        // 항을 뺄 때는 0 으로 바꿀 뿐이라 전부 넣을 때(P1)의 계산 순서는 그대로다.
+        double f = (convection ? -(conv_r + conv_z) : 0.0) +
+                   (viscous ? (visc_r + visc_z + hoop) / m.rho_u(i, j) : 0.0) +
+                   (forces ? p_.gravity[0] : 0.0);
+        if (has_source) f += su_(i, j);
+        fu(i, j) = f;
       }
-
-      auto tau_rr = [&](int c) {
-        return 2.0 * m.mu_cell(wrap_r(c), j) * (U(u, c + 1, j, t) - U(u, c, j, t)) / g.dr;
-      };
-      const double visc_r = (m_r * tau_rr(i) - m_l * tau_rr(i - 1)) / (m_f * g.dr);
-      const double visc_z = (tau_rz(i, j + 1) - tau_rz(i, j)) / g.dz;
-      const double r_f = g.rf(i);
-      const double hoop = axisym ? -2.0 * m.mu_u(i, j) * u(i, j) / (r_f * r_f) : 0.0;
-
-      // 항을 뺄 때는 0 으로 바꿀 뿐이라 전부 넣을 때(P1)의 계산 순서는 그대로다.
-      double f = (convection ? -(conv_r + conv_z) : 0.0) +
-                 (viscous ? (visc_r + visc_z + hoop) / m.rho_u(i, j) : 0.0) +
-                 (forces ? p_.gravity[0] : 0.0);
-      if (has_source) f += su_(i, j);
-      fu(i, j) = f;
     }
-  }
+  });
 
   // z 방향 운동량 (z 면)
-  for (int i = 0; i < g.nr; ++i) {
-    const double m_c = g.metric(g.rc(i));
-    const double m_w = g.metric(g.rf(i));
-    const double m_e = g.metric(g.rf(i + 1));
-    for (int j = jw_lo_; j < jw_hi_; ++j) {
-      const double w_s = 0.5 * (W(w, i, j - 1, t) + W(w, i, j, t));
-      const double w_n = 0.5 * (W(w, i, j, t) + W(w, i, j + 1, t));
-      double conv_r, conv_z;
-      if (consistent) {
-        // r 면 (꼭짓점 fi): w 면 fi−1 과 fi 사이. z 면 (셀 c 중심): w 면 c 와 c+1 사이.
-        auto r_face = [&](int fi, double coef) {
-          const double a = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
-          const bool hm = w_r_ok(fi - 2), hp = w_r_ok(fi + 1);
-          return Face{coef, a,
-                      upwind(a, RW(fi - 2, j), hm, RW(fi - 1, j), RW(fi, j), RW(fi + 1, j), hp),
-                      a >= 0.0 ? RW(fi - 1, j) : RW(fi, j),
-                      upwind(a, hm ? W(w, fi - 2, j, t) : 0.0, hm, W(w, fi - 1, j, t), W(w, fi, j, t),
-                             hp ? W(w, fi + 1, j, t) : 0.0, hp)};
+  parallel::parallel_for(0, g.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
+    for (int i = i_lo; i < i_hi; ++i) {
+      const double m_c = g.metric(g.rc(i));
+      const double m_w = g.metric(g.rf(i));
+      const double m_e = g.metric(g.rf(i + 1));
+      for (int j = jw_lo_; j < jw_hi_; ++j) {
+        const double w_s = 0.5 * (W(w, i, j - 1, t) + W(w, i, j, t));
+        const double w_n = 0.5 * (W(w, i, j, t) + W(w, i, j + 1, t));
+        double conv_r, conv_z;
+        if (consistent) {
+          // r 면 (꼭짓점 fi): w 면 fi−1 과 fi 사이. z 면 (셀 c 중심): w 면 c 와 c+1 사이.
+          auto r_face = [&](int fi, double coef) {
+            const double a = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+            const bool hm = w_r_ok(fi - 2), hp = w_r_ok(fi + 1);
+            return Face{coef, a,
+                        upwind(a, RW(fi - 2, j), hm, RW(fi - 1, j), RW(fi, j), RW(fi + 1, j), hp),
+                        a >= 0.0 ? RW(fi - 1, j) : RW(fi, j),
+                        upwind(a, hm ? W(w, fi - 2, j, t) : 0.0, hm, W(w, fi - 1, j, t), W(w, fi, j, t),
+                               hp ? W(w, fi + 1, j, t) : 0.0, hp)};
+          };
+          auto z_face = [&](int c, double a, double coef) {
+            const bool hm = w_z_ok(c - 1), hp = w_z_ok(c + 2);
+            return Face{coef, a,
+                        upwind(a, RW(i, c - 1), hm, RW(i, c), RW(i, c + 1), RW(i, c + 2), hp),
+                        a >= 0.0 ? RW(i, c) : RW(i, c + 1),
+                        upwind(a, hm ? W(w, i, c - 1, t) : 0.0, hm, W(w, i, c, t), W(w, i, c + 1, t),
+                               hp ? W(w, i, c + 2, t) : 0.0, hp)};
+          };
+          const Face f[4] = {r_face(i + 1, m_e / (m_c * g.dr)), r_face(i, -m_w / (m_c * g.dr)),
+                             z_face(j, w_n, 1.0 / g.dz), z_face(j - 1, w_s, -1.0 / g.dz)};
+          conv_r = consistent_accel(f, m.rho_w(i, j), w(i, j));
+          conv_z = 0.0;
+        } else if (!limited) {
+          auto flux_r = [&](int fi) {
+            const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+            const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
+            return uc * wc;
+          };
+          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
+          conv_z = (w_n * w_n - w_s * w_s) / g.dz;
+        } else {
+          auto flux_r = [&](int fi) {
+            const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+            const double q = upwind(uc, w_r_ok(fi - 2) ? W(w, fi - 2, j, t) : 0.0, w_r_ok(fi - 2),
+                                    W(w, fi - 1, j, t), W(w, fi, j, t),
+                                    w_r_ok(fi + 1) ? W(w, fi + 1, j, t) : 0.0, w_r_ok(fi + 1));
+            return uc * q;
+          };
+          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
+          // 셀 c (z 면 c 와 c+1 사이) 의 z 플럭스
+          auto flux_z = [&](int c, double a) {
+            const double q = upwind(a, w_z_ok(c - 1) ? W(w, i, c - 1, t) : 0.0, w_z_ok(c - 1),
+                                    W(w, i, c, t), W(w, i, c + 1, t),
+                                    w_z_ok(c + 2) ? W(w, i, c + 2, t) : 0.0, w_z_ok(c + 2));
+            return a * q;
+          };
+          conv_z = (flux_z(j, w_n) - flux_z(j - 1, w_s)) / g.dz;
+        }
+
+        const double visc_r = (m_e * tau_rz(i + 1, j) - m_w * tau_rz(i, j)) / (m_c * g.dr);
+        auto tau_zz = [&](int c) {
+          return 2.0 * m.mu_cell(i, wrap_z(c)) * (W(w, i, c + 1, t) - W(w, i, c, t)) / g.dz;
         };
-        auto z_face = [&](int c, double a, double coef) {
-          const bool hm = w_z_ok(c - 1), hp = w_z_ok(c + 2);
-          return Face{coef, a,
-                      upwind(a, RW(i, c - 1), hm, RW(i, c), RW(i, c + 1), RW(i, c + 2), hp),
-                      a >= 0.0 ? RW(i, c) : RW(i, c + 1),
-                      upwind(a, hm ? W(w, i, c - 1, t) : 0.0, hm, W(w, i, c, t), W(w, i, c + 1, t),
-                             hp ? W(w, i, c + 2, t) : 0.0, hp)};
-        };
-        const Face f[4] = {r_face(i + 1, m_e / (m_c * g.dr)), r_face(i, -m_w / (m_c * g.dr)),
-                           z_face(j, w_n, 1.0 / g.dz), z_face(j - 1, w_s, -1.0 / g.dz)};
-        conv_r = consistent_accel(f, m.rho_w(i, j), w(i, j));
-        conv_z = 0.0;
-      } else if (!limited) {
-        auto flux_r = [&](int fi) {
-          const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
-          const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
-          return uc * wc;
-        };
-        conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
-        conv_z = (w_n * w_n - w_s * w_s) / g.dz;
-      } else {
-        auto flux_r = [&](int fi) {
-          const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
-          const double q = upwind(uc, w_r_ok(fi - 2) ? W(w, fi - 2, j, t) : 0.0, w_r_ok(fi - 2),
-                                  W(w, fi - 1, j, t), W(w, fi, j, t),
-                                  w_r_ok(fi + 1) ? W(w, fi + 1, j, t) : 0.0, w_r_ok(fi + 1));
-          return uc * q;
-        };
-        conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
-        // 셀 c (z 면 c 와 c+1 사이) 의 z 플럭스
-        auto flux_z = [&](int c, double a) {
-          const double q = upwind(a, w_z_ok(c - 1) ? W(w, i, c - 1, t) : 0.0, w_z_ok(c - 1),
-                                  W(w, i, c, t), W(w, i, c + 1, t),
-                                  w_z_ok(c + 2) ? W(w, i, c + 2, t) : 0.0, w_z_ok(c + 2));
-          return a * q;
-        };
-        conv_z = (flux_z(j, w_n) - flux_z(j - 1, w_s)) / g.dz;
+        const double visc_z = (tau_zz(j) - tau_zz(j - 1)) / g.dz;
+
+        double f = (convection ? -(conv_r + conv_z) : 0.0) +
+                   (viscous ? (visc_r + visc_z) / m.rho_w(i, j) : 0.0) +
+                   (forces ? p_.gravity[1] : 0.0);
+        if (has_source) f += sw_(i, j);
+        fw(i, j) = f;
       }
-
-      const double visc_r = (m_e * tau_rz(i + 1, j) - m_w * tau_rz(i, j)) / (m_c * g.dr);
-      auto tau_zz = [&](int c) {
-        return 2.0 * m.mu_cell(i, wrap_z(c)) * (W(w, i, c + 1, t) - W(w, i, c, t)) / g.dz;
-      };
-      const double visc_z = (tau_zz(j) - tau_zz(j - 1)) / g.dz;
-
-      double f = (convection ? -(conv_r + conv_z) : 0.0) +
-                 (viscous ? (visc_r + visc_z) / m.rho_w(i, j) : 0.0) +
-                 (forces ? p_.gravity[1] : 0.0);
-      if (has_source) f += sw_(i, j);
-      fw(i, j) = f;
     }
-  }
+  });
 
   if (periodic_r_) {
     for (int j = 0; j < g.nz; ++j) fu(g.nr, j) = fu(0, j);

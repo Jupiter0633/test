@@ -90,7 +90,8 @@ bool write_run_folder(const std::filesystem::path& dir, const RunMetadata& meta,
       << "\n[machine]\n"
       << "name = " << meta.machine << "\n"
       << "role = " << machine_role_name(meta.machine_role) << "\n"
-      << "hardware_threads = " << meta.hardware_threads << "\n";
+      << "hardware_threads = " << meta.hardware_threads << "\n"
+      << "solver_threads = " << meta.solver_threads << "\n";
   if (!out) {
     error = "failed while writing run_meta.txt";
     return false;
