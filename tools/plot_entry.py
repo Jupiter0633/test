@@ -1,10 +1,12 @@
 """개발용 그림: hcw_dev entry-snap 이 쓴 snap_NNN.csv, history.csv 로 입수 과정 그림을 만든다.
 
-사용법:  python tools/plot_entry.py <snapshot 폴더> [r_max/a] [z_min/a] [z_max/a]
+사용법:  python tools/plot_entry.py <snapshot 폴더> [r_max/a] [z_min/a] [z_max/a] [t_from ms] [t_to ms]
+  t_from, t_to 를 주면 그 구간의 스냅샷만 그린다 (최대 16 장).
 출력 (같은 폴더):
   water.png    시각별 물 (파랑) – 공기 (흰색) 분포, 물체 (회색), 속도 화살표
   pressure.png 시각별 게이지 압력 색 지도 (빨강 +, 파랑 −), 물–공기 경계선
   history.png  물체 힘과 바닥 평균·포켓 압력의 시간 이력 (그림 시각 표시)
+  diag.png     최저 절대압력, 압력 하한 발동 누적, 축 위 공기층 두께, 포켓 부피
 그림 안 글자는 영어 (프로그램 출력 규칙).
 """
 
@@ -43,10 +45,16 @@ def main():
     r_max = float(sys.argv[2]) if len(sys.argv) > 2 else 1.6
     z_min = float(sys.argv[3]) if len(sys.argv) > 3 else -0.6
     z_max = float(sys.argv[4]) if len(sys.argv) > 4 else 0.6
+    t_from = float(sys.argv[5]) if len(sys.argv) > 5 else -1.0
+    t_to = float(sys.argv[6]) if len(sys.argv) > 6 else 1e9
     snaps = sorted(glob.glob(os.path.join(folder, "snap_*.csv")))
     if not snaps:
         sys.exit("no snap_*.csv in " + folder)
     loaded = [read_snapshot(p) for p in snaps]
+    loaded = [x for x in loaded if t_from - 1e-9 <= x[0]["t"] * 1e3 <= t_to + 1e-9]
+    if len(loaded) > 16:
+        stride = math.ceil(len(loaded) / 16)
+        loaded = loaded[::stride]
     a = loaded[0][0]["a"]
     cols = 4
     rows = math.ceil(len(loaded) / cols)
@@ -121,6 +129,30 @@ def main():
     fig.savefig(out, dpi=110, bbox_inches="tight")
     plt.close(fig)
     print("wrote", out)
+
+    if hist.shape[1] >= 8:
+        t = hist[:, 0] * 1e3
+        fig, axs = plt.subplots(4, 1, figsize=(9, 9), sharex=True)
+        axs[0].plot(t, hist[:, 1], "k-", lw=1)
+        axs[0].set_ylabel("force (N)")
+        axs[1].plot(t, hist[:, 5] / 1e3, "tab:purple", lw=1)
+        axs[1].axhline(1.0, color="tab:red", ls=":", lw=1)
+        axs[1].set_ylabel("min abs. pressure (kPa)")
+        axs[1].text(0.01, 0.05, "red dotted: 1 kPa air pressure floor", transform=axs[1].transAxes, fontsize=8)
+        axs[2].plot(t, np.diff(np.concatenate([[0.0], hist[:, 6]])), "tab:orange", lw=1)
+        axs[2].set_ylabel("floored cells per step")
+        axs[3].plot(t, hist[:, 7] / a, "tab:blue", lw=1, label="air gap on axis / a")
+        axs[3].plot(t, hist[:, 4] * 2 * np.pi / a**3, "tab:green", lw=1, label="pocket volume / a^3")
+        axs[3].set_ylabel("gap, volume")
+        axs[3].legend(fontsize=8)
+        axs[3].set_xlabel("t (ms)")
+        for ax in axs:
+            ax.grid(alpha=0.3)
+        fig.suptitle("Entry diagnostics")
+        out = os.path.join(folder, "diag.png")
+        fig.savefig(out, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        print("wrote", out)
 
 
 if __name__ == "__main__":

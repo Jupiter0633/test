@@ -65,6 +65,8 @@ struct EntrySetup {
 struct EntryOut {
   GridRun run;
   std::vector<double> t, force, p_bottom, pocket_p, wetted;
+  // 개발용 진단 (history.csv): 포켓 부피, 유효 셀 최저 절대압력, 하한 발동 셀 누적, 축 위 공기층 두께 (바닥면–수면)
+  std::vector<double> pocket_vol, p_min_abs, floor_cells, gap_axis;
   // 3-F: 반 단계 시각의 표면 힘과 제어면 힘
   std::vector<double> fs_half, fcv_half;
   double impulse = 0.0, impulse_cv = 0.0;
@@ -335,6 +337,10 @@ EntryOut run_entry_impl(const EntrySetup& es) {
       out.p_bottom.push_back(0.0);
       out.pocket_p.push_back(0.0);
       out.wetted.push_back(0.0);
+      out.pocket_vol.push_back(0.0);
+      out.p_min_abs.push_back(0.0);
+      out.floor_cells.push_back(0.0);
+      out.gap_axis.push_back(0.0);
       if (es.cv) cv_prev = cv_terms(g, s.flow(), s.vof().f(), s.fluid_fraction(t), es.cv_rs * kA, es.cv_zb * kA, es.cv_zt * kA);
       f_prev = 0.0;
       t_prev = t;
@@ -402,6 +408,27 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     out.p_bottom.push_back(pb_all);
     out.pocket_p.push_back(pk.found ? pk.pressure - ref : 0.0);
     out.wetted.push_back(wet);
+    {
+      double pmin = 1e300;
+      for (std::size_t k = 0; k < geom.active.size(); ++k) {
+        if (geom.active[k]) pmin = std::min(pmin, p.data()[k]);
+      }
+      // 축 옆 첫 열에서 바닥면 바로 아래부터 내려가며 물 비율이 처음 0.5 를 넘는 셀의 윗면 = 수면
+      const double zb = zc - hh;
+      double gap = 0.0;
+      for (int j = g.nz - 1; j >= 0; --j) {
+        if (g.zc(j) >= zb) continue;
+        const double ph = phi(0, j);
+        if (ph > 0.5 && s.vof().f()(0, j) / ph > 0.5) {
+          gap = zb - (g.zf(j) + s.vof().f()(0, j) / ph * g.dz);
+          break;
+        }
+      }
+      out.pocket_vol.push_back(pk.found ? pk.volume : 0.0);
+      out.p_min_abs.push_back(pmin + (es.kappa > 0.0 ? 0.0 : kPatm - ref));
+      out.floor_cells.push_back(static_cast<double>(s.flow().stats().pressure_floor_cells));
+      out.gap_axis.push_back(gap);
+    }
     if (pk.found) {
       pocket_seen = true;
       pocket_max_volume = std::max(pocket_max_volume, pk.volume);
@@ -579,9 +606,10 @@ TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, 
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
   std::ofstream h(std::filesystem::path(dir) / "history.csv");
-  h << "t,force,p_bottom,p_pocket\n";
+  h << "t,force,p_bottom,p_pocket,pocket_vol,p_min_abs,floor_cells,gap_axis\n";
   for (std::size_t k = 0; k < o.t.size(); ++k) {
-    h << o.t[k] << "," << o.force[k] << "," << o.p_bottom[k] << "," << o.pocket_p[k] << "\n";
+    h << o.t[k] << "," << o.force[k] << "," << o.p_bottom[k] << "," << o.pocket_p[k] << "," << o.pocket_vol[k] << ","
+      << o.p_min_abs[k] << "," << o.floor_cells[k] << "," << o.gap_axis[k] << "\n";
   }
   rep.runs.push_back(o.run);
   rep.notes.push_back("snapshots and history.csv written to " + dir);
