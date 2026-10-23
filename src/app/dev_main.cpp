@@ -22,7 +22,8 @@ void usage() {
                "       hcw_dev entry-snap <a/dx> <dt factor> <out dir> <interval ms> [no-water-floor] [--threads N]\n"
                "  entry-dt  disk entry (P4 3-B conditions) with the time-step rule scaled by <dt factor>;\n"
                "            prints impulse, peaks and the 3-F surface vs control-volume force (development only)\n"
-               "  entry-snap  same run, writing cell snapshots and history.csv for tools/plot_entry.py\n";
+               "  entry-snap  same run, writing cell snapshots and history.csv for tools/plot_entry.py\n"
+               "  --stretched  P4 stretched grid (a/dx is then a/dx_core); add it to either command\n";
 }
 
 }  // namespace
@@ -31,8 +32,12 @@ int main(int argc, char** argv) {
   std::vector<std::string> args(argv + 1, argv + argc);
   std::string thread_error;
   int threads = parallel::threads_from_environment(thread_error);
+  bool stretched = false;  // P4 새 조건의 늘어나는 격자 (n = a/Δ_core)
   for (auto it = args.begin(); it != args.end();) {
-    if (*it == "--threads") {
+    if (*it == "--stretched") {
+      stretched = true;
+      it = args.erase(it);
+    } else if (*it == "--threads") {
       it = args.erase(it);
       char* end = nullptr;
       const long n = it == args.end() ? 0 : std::strtol(it->c_str(), &end, 10);
@@ -69,8 +74,8 @@ int main(int argc, char** argv) {
             << "threads  : " << parallel::describe() << "\n";
   const verify::TestReport rep =
       snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str()),
-                                         !(args.size() == 6 && args[5] == "no-water-floor"))
-           : verify::entry_dev_study(n, f);
+                                         !(args.size() == 6 && args[5] == "no-water-floor"), stretched)
+           : verify::entry_dev_study(n, f, stretched);
   for (const auto& r : rep.runs) {
     std::cout << "[" << r.label << "]" << (r.failure.empty() ? "" : "  " + r.failure) << "\n";
     for (const auto& [k, v] : r.metrics) std::cout << "  " << k << " = " << v << "\n";

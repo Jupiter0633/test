@@ -74,8 +74,9 @@ struct Grid {
 // 양쪽으로 넓힌다. 바깥은 성장비 q ≤ ratio 를 영역 끝에 정확히 닿게 고른다.
 // refine 번 세분: 가장 거친 격자의 경계를 매개변수 s = k/N 에 대해 단조 3 차 보간 (PCHIP) 한 사상에서
 // s = k/(N·2^refine) 로 다시 잡는다. 균일 core 안의 경계는 정확히 등간격으로 나뉜다.
+// pins: core 바깥에서 칸 경계가 반드시 지나야 하는 위치 (예: 제어면). 구간마다 따로 채운다 (refine = 0 에서 정확).
 std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, double h_core, double ratio,
-                                    double h_max, int refine);
+                                    double h_max, int refine, const std::vector<double>& pins = {});
 
 // 행 우선 2차원 배열. (i, j) → i * nj + j
 class Array2D {

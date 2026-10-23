@@ -73,23 +73,23 @@ def main():
         for ax, (meta, f) in zip(axes.flat, loaded):
             ax.set_visible(True)
             r, z = f["r"][:, 0] / a, f["z"][0, :] / a
-            dr, dz = meta["dr"] / a, meta["dz"] / a
-            extent = (r[0] - dr / 2, r[-1] + dr / 2, z[0] - dz / 2, z[-1] + dz / 2)
+            # 늘어나는 격자도 그리도록 셀 중심 좌표로 칸을 칠한다 (shading="nearest")
             water = np.where(f["phi"] > 0.5, f["water"], np.nan)
             if kind == "water":
-                ax.imshow(water.T, origin="lower", extent=extent, cmap="Blues", vmin=0, vmax=1, aspect="equal",
-                          interpolation="nearest")
-                # 속도 화살표 (성기게)
-                step = max(1, int(round(0.12 / dr)))
-                R, Z = np.meshgrid(r[::step], z[::step], indexing="ij")
-                U, W = f["u"][::step, ::step], f["w"][::step, ::step]
-                keep = (R <= r_max) & (Z >= z_min) & (Z <= z_max) & (f["phi"][::step, ::step] > 0.5)
+                ax.pcolormesh(r, z, water.T, cmap="Blues", vmin=0, vmax=1, shading="nearest")
+                ax.set_aspect("equal")
+                # 속도 화살표: 칸 크기와 상관없이 0.12a 간격에 가장 가까운 셀
+                ii = np.unique(np.clip(np.searchsorted(r, np.arange(r[0], r_max, 0.12)), 0, len(r) - 1))
+                jj = np.unique(np.clip(np.searchsorted(z, np.arange(z_min, z_max, 0.12)), 0, len(z) - 1))
+                R, Z = np.meshgrid(r[ii], z[jj], indexing="ij")
+                U, W = f["u"][np.ix_(ii, jj)], f["w"][np.ix_(ii, jj)]
+                keep = (R <= r_max) & (Z >= z_min) & (Z <= z_max) & (f["phi"][np.ix_(ii, jj)] > 0.5)
                 ax.quiver(R[keep], Z[keep], U[keep], W[keep], color="tab:red", scale=60, width=0.004, zorder=6)
             else:
                 p = np.where((f["active"] > 0) & (f["phi"] > 0.5), f["p"], np.nan) / 1e3
-                im = ax.imshow(p.T, origin="lower", extent=extent, cmap="RdBu_r",
-                               norm=TwoSlopeNorm(vcenter=0.0, vmin=-pmax / 1e3, vmax=pmax / 1e3),
-                               aspect="equal", interpolation="nearest")
+                im = ax.pcolormesh(r, z, p.T, cmap="RdBu_r", shading="nearest",
+                                   norm=TwoSlopeNorm(vcenter=0.0, vmin=-pmax / 1e3, vmax=pmax / 1e3))
+                ax.set_aspect("equal")
                 ax.contour(r, z, water.T, levels=[0.5], colors="k", linewidths=0.8)
             ax.add_patch(body_patch(meta))
             ax.set_xlim(0, r_max)

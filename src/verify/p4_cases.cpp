@@ -39,7 +39,8 @@ TestReport p4_report(const std::string& id, const std::string& title) {
   rep.title = title;
   rep.phase = "P4";
   rep.criteria_section = "1.4";
-  rep.criteria_commit = "b8ebdf3";  // §1.4 + 2차 시간 적분·압력 하한 (60d72a8 기준 그대로)
+  // §1.4 기준 (60d72a8) + 2차 시간 적분·압력 하한 (b8ebdf3) + 늘어나는 격자·Δt × ¼ (d753d5a, 격자 보충 acd6130)
+  rep.criteria_commit = "acd6130";
   return rep;
 }
 
@@ -63,7 +64,19 @@ struct EntrySetup {
   double snapshot_interval = 0.0;
   // 물 압력 하한 (03 §1.4 구현 보충, 2026-10-23). 개발 비교용으로 끌 수 있다.
   bool water_floor = true;
+  // 늘어나는 격자 (03 §1.4 P4 새 조건): n = a/Δ_core, core r ≤ 1.3a, −0.4a ≤ z ≤ 0.2a,
+  // 바깥 크기 비 ≤ 1.05, 크기 상한 a/16 (영역은 기존 그대로)
+  bool stretched = false;
 };
+
+// P4 판정·보고 시험의 새 조건 (03 §1.4, d753d5a): 늘어나는 격자, Δt 규칙 × ¼
+EntrySetup p4_entry(int n) {
+  EntrySetup es;
+  es.n = n;
+  es.stretched = true;
+  es.dt_factor = 0.25;
+  return es;
+}
 
 struct EntryOut {
   GridRun run;
@@ -267,8 +280,17 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   flow::Problem pb;
   const int nr = static_cast<int>(std::lround(es.r_max * es.n));
   const int nz = static_cast<int>(std::lround((es.z_max - es.z_min) * es.n));
-  pb.grid = Grid(planar ? Geometry::Planar : Geometry::Axisymmetric, nr, nz, 0.0, es.r_max * kA, es.z_min * kA,
-                 es.z_max * kA);
+  const Geometry geom_kind = planar ? Geometry::Planar : Geometry::Axisymmetric;
+  if (es.stretched) {
+    const double hc = kA / es.n, hm = std::max(hc, kA / 16.0);
+    // 3-F 제어면 (r = cv_rs, z = cv_zb, cv_zt) 은 칸 경계 위에 있어야 한다
+    const std::vector<double> pr = es.cv ? std::vector<double>{es.cv_rs * kA} : std::vector<double>{};
+    const std::vector<double> pz = es.cv ? std::vector<double>{es.cv_zb * kA, es.cv_zt * kA} : std::vector<double>{};
+    pb.grid = Grid::stretched(geom_kind, flow::stretched_faces(0.0, es.r_max * kA, 0.0, 1.3 * kA, hc, 1.05, hm, 0, pr),
+                              flow::stretched_faces(es.z_min * kA, es.z_max * kA, -0.4 * kA, 0.2 * kA, hc, 1.05, hm, 0, pz));
+  } else {
+    pb.grid = Grid(geom_kind, nr, nz, 0.0, es.r_max * kA, es.z_min * kA, es.z_max * kA);
+  }
   pb.bc.r_min.kind = flow::BoundaryKind::Axis;  // 축대칭 축, 평면에서는 대칭면
   pb.gravity = {0.0, -kG};
   const Grid g = pb.grid;
@@ -561,7 +583,9 @@ std::string history(const EntryOut& o, const std::vector<double>& y, double scal
   return s;
 }
 
-std::string label_of(const EntrySetup& es) { return "a/dx=" + std::to_string(es.n); }
+std::string label_of(const EntrySetup& es) {
+  return (es.stretched ? "a/dx_core=" : "a/dx=") + std::to_string(es.n);
+}
 
 bool runs_ok(const std::vector<GridRun>& runs) {
   return std::all_of(runs.begin(), runs.end(), [](const GridRun& r) { return r.failure.empty(); });
@@ -580,11 +604,12 @@ bool gci_fine(double phi1, double phi2, double phi3, double& gci, double& p) {
 }
 
 // ---------------------------------------------------------------- 개발용
-TestReport entry_dev_study(int n, double dt_factor) {
+TestReport entry_dev_study(int n, double dt_factor, bool stretched) {
   TestReport rep = p4_report("dev-dt", "Disk entry time-step study (development only, not a verdict)");
   EntrySetup es;
   es.n = n;
   es.dt_factor = dt_factor;
+  es.stretched = stretched;
   es.cv = true;
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
@@ -614,7 +639,7 @@ TestReport entry_dev_study(int n, double dt_factor) {
 }
 
 TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, double interval,
-                               bool water_floor) {
+                               bool water_floor, bool stretched) {
   TestReport rep = p4_report("dev-snap", "Disk entry snapshots for figures (development only, not a verdict)");
   std::filesystem::create_directories(dir);
   EntrySetup es;
@@ -623,6 +648,7 @@ TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, 
   es.snapshot_dir = dir;
   es.snapshot_interval = interval;
   es.water_floor = water_floor;
+  es.stretched = stretched;
   rep.notes.push_back(std::string("water pressure floor: ") + (water_floor ? "on (2.3 kPa)" : "off"));
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
@@ -638,14 +664,15 @@ TestReport entry_dev_snapshots(int n, double dt_factor, const std::string& dir, 
   return rep;
 }
 
+GridPlan s_plan(const std::string& id);
+
 // ---------------------------------------------------------------- 3-A
 TestReport run_3a(bool quick) {
   TestReport rep = p4_report("3-A", "Planar wedge entry at constant speed (report only)");
   for (double beta : {10.0, 20.0, 30.0}) {
-    EntrySetup es;
+    EntrySetup es = p4_entry(quick ? 16 : 128);  // a/Δ = 8 은 쐐기 높이가 1–3 칸이라 빠른 점검으로도 너무 거칠다
     es.kind = BodyKind::Wedge;
     es.beta_deg = beta;
-    es.n = quick ? 16 : 32;  // a/Δ = 8 은 쐐기 높이가 1–3 칸이라 빠른 점검으로도 너무 거칠다
     es.depth_end = 0.5;  // 꼭짓점이 쐐기 높이의 절반 깊이까지
     EntryOut o = run_entry(es);
     o.run.label = "deadrise " + fmt(beta) + " deg, " + label_of(es);
@@ -676,8 +703,7 @@ TestReport run_3a(bool quick) {
 // ---------------------------------------------------------------- 3-B
 TestReport run_3b(bool quick) {
   TestReport rep = p4_report("3-B", "Flat disk entry with air cushioning (qualitative)");
-  EntrySetup es;
-  es.n = quick ? 8 : 32;
+  EntrySetup es = p4_entry(quick ? 8 : 256);
   EntryOut o = run_entry(es);
   o.run.label = label_of(es);
   if (o.run.failure.empty()) {
@@ -714,11 +740,10 @@ TestReport run_3b(bool quick) {
 // ---------------------------------------------------------------- 3-C
 TestReport run_3c(bool quick) {
   TestReport rep = p4_report("3-C", "Numerical independence of disk entry (grid GCI judged, others reported)");
-  const std::vector<int> ns = quick ? std::vector<int>{4, 8, 16} : std::vector<int>{8, 16, 32, 64};
+  const std::vector<int> ns = quick ? std::vector<int>{4, 8, 16} : std::vector<int>{64, 128, 256, 512};
   std::vector<GridRun> grid_runs;
   for (int n : ns) {
-    EntrySetup es;
-    es.n = n;
+    EntrySetup es = p4_entry(n);
     EntryOut o = run_entry(es);
     o.run.label = label_of(es);
     note_3d(rep, o.run);
@@ -748,8 +773,8 @@ TestReport run_3c(bool quick) {
       }
     }
   }
-  // 보고만: a/Δ = 32 (quick 8) 기준 대비 변화율
-  const int nb = quick ? 8 : 32;
+  // 보고만: a/Δ_core = 128 (quick 8) 기준 대비 변화율
+  const int nb = quick ? 8 : 128;
   const GridRun* base = nullptr;
   for (const auto& r : grid_runs) {
     if (r.n == nb && r.failure.empty()) base = &r;
@@ -759,15 +784,14 @@ TestReport run_3c(bool quick) {
     std::function<void(EntrySetup&)> set;
   };
   const std::vector<Variant> variants = {
-      {"dt x 0.5", [](EntrySetup& e) { e.dt_factor = 0.5; }},
+      {"dt x 0.5", [](EntrySetup& e) { e.dt_factor *= 0.5; }},
       {"gap 0.05a", [](EntrySetup& e) { e.h0 = 0.05; }},
       {"gap 0.2a", [](EntrySetup& e) { e.h0 = 0.2; }},
       {"domain r<=4a, z>=-4a", [](EntrySetup& e) { e.r_max = 4.0; e.z_min = -4.0; }},
       {"Poisson tolerance x 10", [](EntrySetup& e) { e.tol_factor = 10.0; }},
   };
   for (const auto& v : variants) {
-    EntrySetup es;
-    es.n = nb;
+    EntrySetup es = p4_entry(nb);
     v.set(es);
     EntryOut o = run_entry(es);
     if (!o.run.failure.empty()) {
@@ -781,7 +805,7 @@ TestReport run_3c(bool quick) {
       const double b = base->metrics.at(key), x = o.run.metrics.at(key);
       s += std::string(s.empty() ? "" : ", ") + key + " " + fmt((x - b) / b);
     }
-    rep.notes.push_back("variant " + v.name + " (relative change vs a/dx=" + std::to_string(nb) + "): " + s);
+    rep.notes.push_back("variant " + v.name + " (relative change vs a/dx_core=" + std::to_string(nb) + "): " + s);
   }
   rep.notes.push_back("GCI per Celik et al. [R-25]: safety factor 1.25, ratio 2, observed order clipped to [0.5, 3]; "
                       "peak force and peak point pressure GCI are report only");
@@ -793,8 +817,7 @@ TestReport run_3c(bool quick) {
 TestReport run_3e(bool quick) {
   TestReport rep = p4_report("3-E", "Air model sensitivity for disk entry (report only)");
   for (double kappa : {1.4, 1.0, 0.0}) {
-    EntrySetup es;
-    es.n = quick ? 8 : 32;
+    EntrySetup es = p4_entry(quick ? 8 : 128);
     es.kappa = kappa;
     EntryOut o = run_entry(es);
     o.run.label = kappa > 0.0 ? "isentropic kappa=" + fmt(kappa) : std::string("incompressible air");
@@ -814,10 +837,9 @@ TestReport run_3e(bool quick) {
 TestReport run_3f(bool quick) {
   TestReport rep = p4_report("3-F", "Momentum balance: surface force vs control-volume force");
   rep.criteria_commit = "eecd38c";  // 제어면 윗면 1.25a (변경 기록 03 §1.4)
-  const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{32, 64};
+  const std::vector<int> ns = quick ? std::vector<int>{8, 16} : std::vector<int>{128, 256};
   for (int n : ns) {
-    EntrySetup es;
-    es.n = n;
+    EntrySetup es = p4_entry(n);
     es.cv = true;
     EntryOut o = run_entry(es);
     o.run.label = label_of(es);
@@ -869,10 +891,15 @@ TestReport run_3g(bool quick, const GridPlan* plan) {
   if (plan) {  // 늘어나는 격자 (S-5, 03 §1.4, 격자 조건 변경 acd6130)
     rep.id = plan->id;
     rep.title += " on stretched grids";
-    rep.criteria_commit = "acd6130";
   }
-  std::vector<int> ns = quick ? std::vector<int>{4, 8} : std::vector<int>{16, 32};
-  if (plan) ns = quick ? std::vector<int>{0} : plan->levels;
+  // 3-G 는 S-5 와 같은 늘어나는 격자 (03 §1.4 P4 새 조건)
+  GridPlan own;
+  if (!plan) {
+    own = s_plan("S-5");
+    own.id = "3-G";
+    plan = &own;
+  }
+  std::vector<int> ns = quick ? std::vector<int>{0} : plan->levels;
   const int steps = quick ? 20 : 200;
   const double buoy = kRhoW * kG * kPi * kA * kA * 2.0 * kA;
   for (int n : ns) {
@@ -1015,9 +1042,8 @@ TestReport run_3i(bool quick) {
   TestReport rep = p4_report("3-I", "Side-wall effect: disk vs closed cylinder (report only)");
   std::vector<EntryOut> outs;
   for (BodyKind k : {BodyKind::Disk, BodyKind::ClosedCylinder}) {
-    EntrySetup es;
+    EntrySetup es = p4_entry(quick ? 8 : 128);
     es.kind = k;
-    es.n = quick ? 8 : 32;
     EntryOut o = run_entry(es);
     o.run.label = k == BodyKind::Disk ? "disk (thickness 0.2a)" : "closed cylinder (height 2a)";
     note_3d(rep, o.run);

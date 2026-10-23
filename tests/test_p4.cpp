@@ -155,6 +155,20 @@ void test_stretched_faces() {
   expect(core, "core spacing exact on base and refined grids");
   expect(ratio, "neighbour ratio <= 1.05 on the base grid (" + std::to_string(worst) + ")");
   expect(nested, "refined grid contains the base faces");
+  // 고정점: 경계가 정확히 지나고 비 ≤ 1.05 유지
+  const auto fp = flow::stretched_faces(-3.0, 1.5, -0.4, 0.2, 1.0 / 64.0, 1.05, 1.0 / 16.0, 0, {-2.0, 1.25});
+  bool hit_b = false, hit_t = false;
+  double wp = 1.0;
+  for (std::size_t k = 0; k < fp.size(); ++k) {
+    hit_b = hit_b || fp[k] == -2.0;
+    hit_t = hit_t || fp[k] == 1.25;
+    if (k > 1) {
+      const double d1 = fp[k] - fp[k - 1], d0 = fp[k - 1] - fp[k - 2];
+      wp = std::max(wp, std::max(d1 / d0, d0 / d1));
+    }
+  }
+  expect(hit_b && hit_t, "pinned faces are exact");
+  expect(wp <= 1.05 + 1e-9, "neighbour ratio <= 1.05 with pins (" + std::to_string(wp) + ")");
   // 축대칭 셀 체적 합 = π (r1² − r0²)(z1 − z0) / (2π)
   const auto g = Grid::stretched(Geometry::Axisymmetric, f0, flow::stretched_faces(-1.0, 0.5, -0.2, 0.1, h, 1.05, 4 * h, 1));
   double vol = 0.0;

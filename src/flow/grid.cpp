@@ -73,7 +73,6 @@ int Grid::face_z(double z) const { return uniform_ ? uniform_face(z, z0, hz_) : 
 
 namespace {
 
-// 한쪽 바깥 구간 (길이 len) 의 칸 크기: h_core·ratio^k (상한 h_max) 를 합이 len 에 가장 가깝게 고른 뒤 비례로 맞춘다
 // core 바깥 길이 len 을 채우는 칸 크기 (core 쪽부터). k 번째 칸 = min(h_max, h_core q^k).
 // 칸 수 N 은 q = ratio 로 len 에 닿는 가장 작은 수, q 는 [1/ratio, ratio] 에서 이분법으로 합이 len 이 되게 정한다
 // (이웃 크기 비 ≤ ratio 유지). len 이 너무 짧아 q = 1/ratio 로도 넘치면 그때만 비례로 줄인다.
@@ -133,7 +132,7 @@ double pchip(const std::vector<double>& y, double s) {
 }  // namespace
 
 std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, double h_core, double ratio,
-                                    double h_max, int refine) {
+                                    double h_max, int refine, const std::vector<double>& pins) {
   if (!(lo <= c0 && c0 < c1 && c1 <= hi) || !(h_core > 0.0) || !(ratio >= 1.0) || !(h_max >= h_core)) {
     throw std::invalid_argument("stretched_faces: bad arguments");
   }
@@ -152,8 +151,27 @@ std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, 
     if (c1 > hi) c0 -= c1 - hi, c1 = hi;
   }
   const double hc = (c1 - c0) / n_core;
-  std::vector<double> below = outer_sizes(c0 - lo, hc, ratio, h_max);
-  std::vector<double> above = outer_sizes(hi - c1, hc, ratio, h_max);
+  // 바깥: core 끝에서 영역 끝까지, 고정점 (pins) 마다 구간을 나눠 각 구간을 정확히 채운다.
+  // 다음 구간은 앞 구간 마지막 칸 크기에서 이어서 커진다.
+  auto side = [&](double from, double to) {
+    std::vector<double> stops;
+    for (double p : pins) {
+      if ((p - from) * (to - p) > 0.0) stops.push_back(p);
+    }
+    std::sort(stops.begin(), stops.end(), [&](double x, double y) { return std::abs(x - from) < std::abs(y - from); });
+    stops.push_back(to);
+    std::vector<double> sizes;
+    double start = from, h_prev = hc;
+    for (double stop : stops) {
+      const auto seg = outer_sizes(std::abs(stop - start), h_prev, ratio, h_max);
+      sizes.insert(sizes.end(), seg.begin(), seg.end());
+      if (!seg.empty()) h_prev = seg.back();
+      start = stop;
+    }
+    return std::make_pair(sizes, stops);
+  };
+  const auto [below, below_stops] = side(c0, lo);
+  const auto [above, above_stops] = side(c1, hi);
   std::vector<double> base;
   double x = lo;
   base.push_back(x);
@@ -168,6 +186,13 @@ std::vector<double> stretched_faces(double lo, double hi, double c0, double c1, 
     base.push_back(x);
   }
   base.back() = hi;
+  // 고정점은 반올림 오차 없이 정확한 값으로 둔다
+  for (const auto* stops : {&below_stops, &above_stops}) {
+    for (double p : *stops) {
+      auto it = std::min_element(base.begin(), base.end(), [p](double u, double v) { return std::abs(u - p) < std::abs(v - p); });
+      *it = p;
+    }
+  }
   if (refine <= 0) return base;
   const int n = static_cast<int>(base.size()) - 1;
   const int m = n << refine;
