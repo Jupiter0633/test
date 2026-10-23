@@ -539,6 +539,115 @@ TestReport run_2f(bool quick, bool limiter) {
   return rep;
 }
 
+// ---------------------------------------------------------------- 2-T
+TestReport run_2t(bool quick) {
+  // 2-T 시간 정확도 (03 §1.4, 기준 고정 b8ebdf3): 2-F 공기 스프링, 격자 고정, BDF2, Δt 만 줄인다
+  TestReport rep = p3_report("2-T", "Time accuracy of the BDF2 step: air spring on a fixed grid");
+  rep.criteria_commit = "b8ebdf3";
+  const double la = 0.2, lw = 1.0, p0 = 1e5, v0 = 0.01;
+  const int n = quick ? 8 : 16;
+  const std::vector<int> ns = quick ? std::vector<int>{10, 20} : std::vector<int>{20, 40, 80, 160};  // 주기당 단계 수
+  std::vector<std::vector<GridRun>> groups;
+  for (double kappa : {1.4}) {
+    // 유효 질량에 두 공기층의 관성 ρ_a L_a/3 씩을 넣는다 (§1.3 2-F, 2026-10-23 변경)
+    const double mass = kRhoW * lw + 2.0 * kRhoA * la / 3.0;
+    const double omega = std::sqrt(kappa * p0 * (2.0 / la) / mass);
+    const double period = 2.0 * kPi / omega;
+    const double dp_exact = kappa * p0 * (v0 / omega) / la;
+    std::vector<GridRun> runs;
+    for (int steps_per_period : ns) {
+      GridRun run;
+      run.n = steps_per_period;
+      run.label = "L_a/dz=" + std::to_string(n) + " dt=T/" + std::to_string(steps_per_period);
+      try {
+        const auto t0 = std::chrono::steady_clock::now();
+        const double dz = la / n;
+        flow::Problem pb;
+        pb.grid = Grid(Geometry::Planar, 2, static_cast<int>(std::lround((2 * la + lw) / dz)), 0.0, 0.1, 0.0,
+                       2 * la + lw);
+        pb.bc.r_min.kind = flow::BoundaryKind::Wall;
+        pb.air_kappa = kappa;
+        const Grid& g = pb.grid;
+        Array2D f0(g.nr, g.nz);
+        for (int i = 0; i < g.nr; ++i) {
+          for (int j = 0; j < g.nz; ++j) {
+            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dz, 0.0, 1.0);
+          }
+        }
+        auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
+        flow::SolverOptions opt = convection_options(true);
+        opt.time_order = 2;
+        interface::TwoPhaseSolver s(pb, mat, f0, true, opt);
+        auto w_init = [&](double, double z) {
+          if (z <= la) return v0 * z / la;
+          if (z >= la + lw) return v0 * (2 * la + lw - z) / la;
+          return v0;
+        };
+        s.initialize(0.0, [](double, double) { return 0.0; }, w_init, false);
+        s.flow().set_pressure(Array2D(g.nr, g.nz, p0));
+        const double vol0 = s.vof().water_volume();
+        const double dt = period / steps_per_period;
+        auto pocket = [&]() {  // 아래 공기층 평균 압력 − p₀
+          double sp = 0.0, sv = 0.0;
+          for (int i = 0; i < g.nr; ++i) {
+            for (int j = 0; j < g.nz && g.zf(j + 1) <= la + 1e-12; ++j) {
+              sp += s.flow().pressure()(i, j) * g.cell_volume(i);
+              sv += g.cell_volume(i);
+            }
+          }
+          return sp / sv - p0;
+        };
+        std::vector<double> crossings;
+        double prev = 0.0, amp = 0.0, vol = 0.0;
+        bool first = true;
+        // 2-C 와 같이 0 교차 7 개 (정확히 3 주기) 까지 진행한다. 안전 상한 4.5 주기.
+        while (crossings.size() < 7 && s.time() < 4.5 * period) {
+          s.step(dt);
+          const double pp = pocket();
+          if (s.time() <= period) amp = std::max(amp, std::abs(pp));
+          if (!first && (prev > 0.0) != (pp > 0.0)) crossings.push_back(s.time() - dt * pp / (pp - prev));
+          prev = pp;
+          first = false;
+          vol = std::max(vol, std::abs(s.vof().water_volume() - vol0) / vol0);
+          if (s.flow().stats().solver_failed) break;
+        }
+        run.stats = s.flow().stats();
+        if (run.stats.solver_failed) run.failure = "FAILED_SOLVER";
+        if (crossings.size() < 7) throw std::runtime_error("fewer than seven zero crossings in 4.5 periods");
+        const double om = 2.0 * kPi / ((crossings[6] - crossings[0]) / 3.0);
+        run.metrics["frequency"] = om;
+        run.metrics["frequency_exact"] = omega;
+        run.metrics["frequency_relative_error"] = std::abs(om - omega) / omega;
+        run.metrics["pressure_amplitude"] = amp;
+        run.metrics["pressure_amplitude_exact"] = dp_exact;
+        run.metrics["pressure_amplitude_relative_error"] = std::abs(amp - dp_exact) / dp_exact;
+        run.metrics["volume_relative_change"] = vol;
+        run.seconds = seconds_since(t0);
+      } catch (const std::exception& e) {
+        run.failure = std::string("FAILED_EXCEPTION ") + e.what();
+      }
+      runs.push_back(run);
+    }
+    if (runs_ok(runs)) {
+      const std::string tag = "kappa=" + fmt(kappa) + ": ";
+      auto add = [&](Criterion c) {
+        c.text = tag + c.text;
+        rep.criteria.push_back(c);
+      };
+      add(monotone(runs, "frequency_relative_error"));
+      add(order_at_least(runs, "frequency_relative_error", 1.8));
+    }
+    rep.runs.insert(rep.runs.end(), runs.begin(), runs.end());
+    rep.notes.push_back("kappa=" + fmt(kappa) + ": exact omega = " + fmt(omega) + " rad/s, pressure amplitude " +
+                        fmt(dp_exact) + " Pa (derived with air-layer inertia, 03 section 1.3)");
+  }
+  rep.notes.push_back("2-F setup (kappa = 1.4) on a fixed grid L_a/dz = " + std::to_string(n) +
+                      "; semi-implicit step with variable-step BDF2 (first step backward Euler), scheme B convection; "
+                      "only dt changes (period / 20, 40, 80, 160); 'n' in this report is steps per period");
+  conclude(rep, quick);
+  return rep;
+}
+
 // ---------------------------------------------------------------- 2-D
 // 2026-10-23 보고만 → 판정 시험으로 변경 (03 §1.3, 기준 고정 8ffed34). 대류는 새 방식 (B).
 // 이전 보고만 실행의 기록은 validation/records/WS-2026-10-22.md 에 있다.

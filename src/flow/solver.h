@@ -88,6 +88,15 @@ struct SolverOptions {
   double pressure_tolerance = 1e-13;
   int max_iterations = 50000;
   Convection convection = Convection::Central;
+  // step_implicit 의 시간 차수. 1: 후방 오일러 (P2·P3 판정 방식). 2: 가변 간격 BDF2 (03 §1.4, P4).
+  //   BDF2: (c0 u^{n+1} − c1 u^n + c2 u^{n−1})/Δt, ω = Δt/Δt_prev, c0 = (1+2ω)/(1+ω), c1 = 1+ω,
+  //   c2 = ω²/(1+ω). 명시 항 (대류·중력·원천) 은 (1+ω)E^n − ω E^{n−1} 로 외삽.
+  //   압력 증분은 τ = Δt/c0 로 투영하고, 압축성 공기의 압력 식에는 c2 (p^n − p^{n−1}) 항이 들어간다.
+  //   첫 단계 (이전 값이 없을 때) 는 1 차.
+  int time_order = 1;
+  // 압축성 항 ψ = 공기/(κ p) 에 쓰는 압력의 하한 [Pa] (03 §1.4, P4 는 1e3). 0 이면 하한 없음 —
+  // 공기가 있는 셀의 압력이 0 이하이면 예외 (P3 까지의 동작).
+  double air_pressure_floor = 0.0;
 };
 
 struct SolverStats {
@@ -102,6 +111,8 @@ struct SolverStats {
   long momentum_solves = 0;
   long momentum_iterations = 0;
   double max_momentum_residual = 0.0;
+  // 공기 압력 하한이 쓰인 셀 수의 누적 (단계마다 센 셀 수의 합)
+  long pressure_floor_cells = 0;
 };
 
 class FlowSolver {
@@ -126,7 +137,10 @@ class FlowSolver {
                   const std::function<double(double, double)>& w0, bool project = true);
 
   // step_implicit 이 쓰는 압력장을 지정한다 (예: 정수압 + 대기압). 압축성 공기에서는 절대 압력.
-  void set_pressure(const Array2D& p) { p_inc_ = p; }
+  void set_pressure(const Array2D& p) {
+    p_inc_ = p;
+    hist_valid_ = false;  // BDF2 이력은 새 압력부터 다시
+  }
 
   void step(double dt);
 
@@ -187,7 +201,9 @@ class FlowSolver {
   // 미지수 순서: u 면 (i*nz + j), 그 뒤 w 면 (nu + i*(nz+1) + j).
   void viscous_matrix(double t, CsrMatrix& a);
   // t_rho: 밀도 시각, t_bc: 경계값(벽·물체 속도) 시각
-  void project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi);
+  // extra: 우변에 더할 셀 값 (BDF2 압축성 이력 항, 없으면 nullptr)
+  void project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi,
+               const std::vector<double>* extra = nullptr);
   // b = −(열린 면 유출 + 물체 경계 유출). body_rate 는 물체의 z 속도(투영) 또는 가속도(압력).
   void face_flux_rhs(const Array2D& fu, const Array2D& fw, double body_rate,
                      std::vector<double>& b) const;
@@ -227,7 +243,11 @@ class FlowSolver {
   double visc_time_ = -1.0;
   bool visc_valid_ = false;
   std::vector<double> mom_x_;  // 직전 운동량 해 (초기 추정)
-  std::vector<double> psi_vol_;  // 압축성 공기: 셀마다 ψ V / Δt² (투영 연산자의 대각에 더함)
+  std::vector<double> psi_vol_;  // 압축성 공기: 셀마다 ψ V / τ² (투영 연산자의 대각에 더함)
+  // BDF2 이력 (time_order = 2): 직전 단계의 속도·명시 항·압력과 간격
+  bool hist_valid_ = false;
+  Array2D u_prev_, w_prev_, fu_prev_, fw_prev_, p_prev_;
+  double dt_prev_ = 0.0;
   body::CutGeometry pgeom_;    // 운동량 모드의 압력 기하
   Operator op_mom_;            // 운동량 모드의 투영 연산자
 };

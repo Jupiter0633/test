@@ -35,7 +35,7 @@ TestReport p4_report(const std::string& id, const std::string& title) {
   rep.title = title;
   rep.phase = "P4";
   rep.criteria_section = "1.4";
-  rep.criteria_commit = "60d72a8";
+  rep.criteria_commit = "b8ebdf3";  // §1.4 + 2차 시간 적분·압력 하한 (60d72a8 기준 그대로)
   return rep;
 }
 
@@ -286,6 +286,8 @@ EntryOut run_entry_impl(const EntrySetup& es) {
 
   flow::SolverOptions opt;
   opt.convection = flow::Convection::Consistent;
+  opt.time_order = 2;            // 03 §1.4 2차 시간 적분 (b8ebdf3)
+  opt.air_pressure_floor = 1e3;  // 03 §1.4 공기 압력 하한
   opt.projection_tolerance *= es.tol_factor;
   opt.pressure_tolerance *= es.tol_factor;
   auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
@@ -443,6 +445,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     run.metrics["clipped_water_over_initial"] = s.clipped_water() / water0;
     run.metrics["steps"] = static_cast<double>(s.flow().stats().steps);
     run.metrics["step_retries"] = static_cast<double>(retries);
+    run.metrics["pressure_floor_cells"] = static_cast<double>(s.flow().stats().pressure_floor_cells);
     if (es.kind == BodyKind::ClosedCylinder) run.metrics["peak_side_wall_pressure"] = side_peak;
     run.seconds = seconds_since(t0);
     finish_run(run, s.flow());
@@ -798,6 +801,8 @@ TestReport run_3g(bool quick) {
       pb.air_kappa = 1.4;
       flow::SolverOptions opt;
       opt.convection = flow::Convection::Consistent;
+  opt.time_order = 2;            // 03 §1.4 2차 시간 적분 (b8ebdf3)
+  opt.air_pressure_floor = 1e3;  // 03 §1.4 공기 압력 하한
       auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
       interface::TwoPhaseSolver s(pb, mat, f, true, opt);
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; }, false);

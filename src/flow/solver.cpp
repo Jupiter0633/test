@@ -319,7 +319,8 @@ void FlowSolver::record(const SolveResult& r, double tolerance) {
   if (!r.converged || r.relative_residual > tolerance) stats_.solver_failed = true;
 }
 
-void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi) {
+void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Potential& phi,
+                         const std::vector<double>* extra) {
   const Grid& g = p_.grid;
   Operator& op = operator_at(t_rho, t_bc);
   const MaterialArrays& m = material_at(t_rho);
@@ -328,6 +329,9 @@ void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Pote
   std::vector<double> b;
   face_flux_rhs(u, w, body_w, b);
   remove_active_mean(b);
+  if (extra) {
+    for (std::size_t c = 0; c < b.size(); ++c) b[c] += (*extra)[c];
+  }
   record(refined_solve(op.matrix, op.preconditioner, b, phi.hi, phi.lo,
                        opt_.projection_tolerance, opt_.max_iterations),
          opt_.projection_tolerance);
@@ -619,6 +623,7 @@ void FlowSolver::initialize(double t0, const std::function<double(double, double
     for (int j = 0; j <= g.nz; ++j) w_(i, j) = w0(g.rc(i), g.zf(j));
   }
   apply_boundary(u_, w_, t0);
+  hist_valid_ = false;
   if (do_project) project(u_, w_, t0, t0, phi_[4]);
 }
 
@@ -804,12 +809,25 @@ void FlowSolver::step_implicit(double dt) {
   const int nu = (g.nr + 1) * nz;
   const int n = nu + g.nr * (nz + 1);
   const double t1 = t_ + dt;
+  // 시간 차수: BDF2 는 직전 단계 이력이 있을 때만 (03 §1.4)
+  const bool bdf2 = opt_.time_order == 2 && hist_valid_;
+  const double om = bdf2 ? dt / dt_prev_ : 0.0;
+  const double c0 = bdf2 ? (1.0 + 2.0 * om) / (1.0 + om) : 1.0;
+  const double c1 = bdf2 ? 1.0 + om : 1.0;
+  const double c2 = bdf2 ? om * om / (1.0 + om) : 0.0;
+  const double tau = dt / c0;  // 압력 증분 투영의 유효 간격
 
   // 명시적 부분 (시각 t): 대류 + 중력·원천
   Array2D fu, fw;
   conv_dt_ = dt;
   rhs(u_, w_, t_, fu, fw, true, false, true);
   conv_dt_ = 0.0;
+  // BDF2: 명시 항을 t1 로 외삽. 이력용으로 이번 값은 따로 둔다.
+  const Array2D fu_now = fu, fw_now = fw;
+  if (bdf2) {
+    for (std::size_t q = 0; q < fu.data().size(); ++q) fu.data()[q] = (1.0 + om) * fu.data()[q] - om * fu_prev_.data()[q];
+    for (std::size_t q = 0; q < fw.data().size(); ++q) fw.data()[q] = (1.0 + om) * fw.data()[q] - om * fw_prev_.data()[q];
+  }
   // 점성 부분 (시각 t1): V(u) = A u + c
   if (!visc_valid_ || (p_.material->time_dependent() && visc_time_ != t1)) {
     viscous_matrix(t1, visc_);
@@ -946,18 +964,21 @@ void FlowSolver::step_implicit(double dt) {
       b[k] = (1.0 - f.weight - f.weight2) * ub;
     } else {
       // (1/Δt) u − A u = u^n/Δt + 명시적 항 + c − (1/ρ)∇p^n
-      row.emplace_back(k, 1.0 / dt);
+      // BDF2: (c0/Δt) u − A u = (c1 u^n − c2 u^{n−1})/Δt + 외삽 명시 항 + c − (1/ρ)∇p^n
+      row.emplace_back(k, bdf2 ? c0 / dt : 1.0 / dt);
       for (int q = visc_.row_start[k]; q < visc_.row_start[k + 1]; ++q) {
         row.emplace_back(visc_.col[q], -visc_.val[q]);
       }
       if (k < nu) {
         const int i = k / nz, j = k % nz;
         const double grad = (p_inc_(i, j) - p_inc_(i - 1, j)) / (m.rho_u(i, j) * g.dr);
-        b[k] = u_(i, j) / dt + fu(i, j) + cu(i, j) - grad;
+        const double hist = bdf2 ? (c1 * u_(i, j) - c2 * u_prev_(i, j)) / dt : u_(i, j) / dt;
+        b[k] = hist + fu(i, j) + cu(i, j) - grad;
       } else {
         const int i = (k - nu) / (nz + 1), j = (k - nu) % (nz + 1);
         const double grad = (p_inc_(i, j) - p_inc_(i, j - 1)) / (m.rho_w(i, j) * g.dz);
-        b[k] = w_(i, j) / dt + fw(i, j) + cw(i, j) - grad;
+        const double hist = bdf2 ? (c1 * w_(i, j) - c2 * w_prev_(i, j)) / dt : w_(i, j) / dt;
+        b[k] = hist + fw(i, j) + cw(i, j) - grad;
       }
     }
     std::sort(row.begin(), row.end());
@@ -1003,9 +1024,13 @@ void FlowSolver::step_implicit(double dt) {
   update_geometry(t1);
   std::vector<double> b_raw;
   face_flux_rhs(un, wn, ub_w, b_raw);
+  // BDF2 압축성 이력 항: 우변 += ψ V c2 (p^n − p^{n−1}) / Δt (03 §1.4)
+  std::vector<double> bdf_extra;
   if (p_.air_kappa > 0.0) {
-    // ψ V / Δt², ψ = (공기 체적분율)/(κ p^n) — 압력은 직전 값으로 선형화
+    // ψ V / τ², ψ = (공기 체적분율)/(κ p^n) — 압력은 직전 값으로 선형화 (1 차는 τ = Δt)
     psi_vol_.assign(static_cast<std::size_t>(g.nr) * nz, 0.0);
+    if (bdf2) bdf_extra.assign(psi_vol_.size(), 0.0);
+    long floor_cells = 0;
     for (int i = 0; i < g.nr; ++i) {
       for (int j = 0; j < nz; ++j) {
         const double pa = p_inc_(i, j);
@@ -1018,24 +1043,35 @@ void FlowSolver::step_implicit(double dt) {
         }
         // VOF 잔여 공기 (물 셀의 1e−6 이하) 는 실제 공기가 아니다. 그런 셀에 물의 음압이 걸리면
         // 압축성 항을 빼고 넘어간다 (P4 에서 확인; 압력이 양수인 P3 계산은 그대로).
-        if (!(pa > 0.0) && m.air_fraction(i, j) <= 1e-6) {
+        if (!(pa > 0.0) && m.air_fraction(i, j) <= 1e-6 && opt_.air_pressure_floor <= 0.0) {
           psi_vol_[static_cast<std::size_t>(i) * nz + j] = 0.0;
           continue;
         }
-        if (!(pa > 0.0)) {
+        // 공기 압력 하한 (03 §1.4): 인장 구간에서 ψ 가 정의되도록 하한 압력을 쓴다
+        double p_use = pa;
+        if (opt_.air_pressure_floor > 0.0 && !(pa >= opt_.air_pressure_floor)) {
+          p_use = opt_.air_pressure_floor;
+          ++floor_cells;
+        }
+        if (!(p_use > 0.0)) {
           throw std::runtime_error("compressible air: non-positive absolute pressure at cell (" + std::to_string(i) +
                                    ", " + std::to_string(j) + "), p = " + std::to_string(pa) +
                                    ", air fraction " + std::to_string(m.air_fraction(i, j)));
         }
-        psi_vol_[static_cast<std::size_t>(i) * nz + j] =
-            m.air_fraction(i, j) / (p_.air_kappa * pa) * g.cell_volume(i) / (dt * dt);
+        const double psi_v = m.air_fraction(i, j) / (p_.air_kappa * p_use) * g.cell_volume(i);
+        psi_vol_[static_cast<std::size_t>(i) * nz + j] = psi_v / (tau * tau);
+        // 직전 단계에 압력이 없던 셀 (물체 옆에서 새로 생김) 은 이력 항을 쓰지 않는다
+        if (bdf2 && p_prev_(i, j) > 0.0) {
+          bdf_extra[static_cast<std::size_t>(i) * nz + j] = psi_v * c2 * (pa - p_prev_(i, j)) / dt;
+        }
       }
     }
+    stats_.pressure_floor_cells += floor_cells;
     op_.valid = false;
     op_mom_.valid = false;
   }
   if (!p_.body) {
-    project(un, wn, t1, t1, phi_[0]);
+    project(un, wn, t1, t1, phi_[0], bdf_extra.empty() ? nullptr : &bdf_extra);
   } else {
     // 압력 기하 pgeom_ 는 운동량 조립 전에 만들었다
     if (!op_mom_.valid || p_.body->moving() || p_.material->time_dependent()) {
@@ -1057,6 +1093,11 @@ void FlowSolver::step_implicit(double dt) {
     if (p_.air_kappa <= 0.0) {
       for (std::size_t c = 0; c < div_b.size(); ++c) {
         if (pgeom_.active[c]) div_b[c] -= s / static_cast<double>(count);
+      }
+    }
+    if (!bdf_extra.empty()) {
+      for (std::size_t c = 0; c < div_b.size(); ++c) {
+        if (pgeom_.active[c]) div_b[c] += bdf_extra[c];
       }
     }
     Potential& phi = phi_[0];
@@ -1081,10 +1122,11 @@ void FlowSolver::step_implicit(double dt) {
       }
     }
   }
-  // 증분 압력, 회전형 (Timmermans 형): p += φ/Δt − μ ∇·u*.  φ = Δt · δp (투영 퍼텐셜).
+  // 증분 압력, 회전형 (Timmermans 형): p += φ/τ − μ ∇·u*.  φ = τ · δp (투영 퍼텐셜, 1 차는 τ = Δt).
   // 둘째 항은 정상 상태에서 0 이므로 정상 해를 바꾸지 않으며, 큰 Δt 에서 압력 수렴을 빠르게 한다
   // (Stokes 에서 Uzawa 반복과 같은 꼴).
   const body::CutGeometry& pg = pressure_geometry();
+  const Array2D p_n = p_inc_;  // BDF2 이력용 p^n
   double sum = 0.0, vol = 0.0;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < nz; ++j) {
@@ -1092,7 +1134,7 @@ void FlowSolver::step_implicit(double dt) {
       if (!pg.active[k]) continue;
       // 회전형 항은 ∇·u = 0 을 전제로 하므로 압축성 공기에서는 쓰지 않는다
       const double div = p_.air_kappa > 0.0 ? 0.0 : -b_raw[k] / g.cell_volume(i);
-      p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / dt - m.mu_cell(i, j) * div;
+      p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / tau - m.mu_cell(i, j) * div;
       sum += p_inc_(i, j) * g.cell_volume(i);
       vol += g.cell_volume(i);
     }
@@ -1115,6 +1157,15 @@ void FlowSolver::step_implicit(double dt) {
     umax = std::max(umax, std::abs(wn.data()[q]));
   }
   last_change_ = umax > 0.0 ? du / umax : 0.0;
+  if (opt_.time_order == 2) {
+    u_prev_ = u_;
+    w_prev_ = w_;
+    fu_prev_ = fu_now;
+    fw_prev_ = fw_now;
+    p_prev_ = p_n;
+    dt_prev_ = dt;
+    hist_valid_ = true;
+  }
   u_ = un;
   w_ = wn;
   t_ = t1;

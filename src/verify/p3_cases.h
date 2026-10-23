@@ -17,6 +17,8 @@ TestReport run_2f(bool quick, bool limiter = false);
 // 새 대류 방식 (B: 제한자 + 일관 수송) 의 정확도 (1-C, 1-A(b) 재풀이).
 // limiter = true 인 2-A·2-C·2-F 는 새 방식으로 실행하며 id 에 "(B)" 가 붙는다.
 TestReport run_2h(bool quick);
+// 2차 시간 적분 (BDF2) 의 시간 정확도: 2-F 공기 스프링, 격자 고정, Δt 만 줄임 (03 §1.4, b8ebdf3)
+TestReport run_2t(bool quick);
 
 // 축 위 중심 (0, zc), 반지름 R 인 구가 셀 [r0, r1] × [z0, z1] 에서 차지하는 r 가중 체적 (2π 제외)
 double sphere_cell_volume(double r0, double r1, double z0, double z1, double zc, double radius);
