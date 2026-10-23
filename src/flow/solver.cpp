@@ -356,7 +356,8 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
 
   // 제한자 대류 (Convection::VanLeer): 면 값 = 상류 값 + ½·(van Leer 제한 기울기).
   // qll, ql: 상류 쪽 두 값, qr: 하류 값 (속도 a 의 방향 기준으로 이미 고른 순서)
-  const bool limited = opt_.convection == Convection::VanLeer;
+  const bool consistent = opt_.convection == Convection::Consistent;
+  const bool limited = opt_.convection == Convection::VanLeer || consistent;
   auto face_value = [](double qll, double ql, double qr) {
     const double d1 = ql - qll, d2 = qr - ql;
     const double s = d1 * d2 > 0.0 ? 2.0 * d1 * d2 / (d1 + d2) : 0.0;
@@ -374,6 +375,43 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
   auto u_z_ok = [&](int j) { return periodic_z_ || (j >= -1 && j <= g.nz); };
   auto w_r_ok = [&](int i) { return periodic_r_ || (i >= -1 && i <= g.nr); };
   auto w_z_ok = [&](int j) { return periodic_z_ || (j >= 0 && j <= g.nz); };
+  // 운동량 제어체적 밀도 (유령 위치는 가장 가까운 안쪽 값, 주기면 감음)
+  auto RU = [&](int i, int j) {
+    i = periodic_r_ ? wrap_r(i) : std::clamp(i, 0, g.nr);
+    j = periodic_z_ ? wrap_z(j) : std::clamp(j, 0, g.nz - 1);
+    return m.rho_u(i, j);
+  };
+  auto RW = [&](int i, int j) {
+    i = periodic_r_ ? wrap_r(i) : std::clamp(i, 0, g.nr - 1);
+    j = periodic_z_ ? wrap_z(j) : std::clamp(j, 0, g.nz);
+    return m.rho_w(i, j);
+  };
+  // 일관 수송: 네 면의 (계수, 이동 속도 a, 제한 밀도, 상류 밀도, 수송 속도) → 가속도
+  struct Face {
+    double coef, a, rho_lim, rho_up, q;
+  };
+  auto consistent_accel = [&](const Face (&f)[4], double rho_c, double q_c) {
+    double num = 0.0, div = 0.0;
+    bool heavy_in = false;  // 2 배 넘게 무거운 유체가 들어오는 면 (coef·a < 0 이 유입)
+    for (const Face& x : f) {
+      num += x.coef * x.rho_lim * x.a * (x.q - q_c);
+      div += x.coef * x.rho_lim * x.a;
+      heavy_in = heavy_in || (x.coef * x.a < 0.0 && x.rho_lim > 2.0 * rho_c);
+    }
+    // 밀도가 매끈한 곳은 ρ 로 나눈다 (반이산 질량 가중 이류 a·∇u, 시간 2차 유지).
+    // 갱신 밀도 ρ* 로 나누면 시간 1차 오차 (Δt ∇·ṁ / ρ) 가 생기므로 무거운 유입이 있는 칸에만 쓴다.
+    if (!heavy_in) return num / rho_c;
+    double den = rho_c - conv_dt_ * div;
+    if (den < 0.5 * rho_c) {
+      num = div = 0.0;
+      for (const Face& x : f) {
+        num += x.coef * x.rho_up * x.a * (x.q - q_c);
+        div += x.coef * x.rho_up * x.a;
+      }
+      den = rho_c - conv_dt_ * div;
+    }
+    return num / den;
+  };
 
   // 꼭짓점 (r 면 fi, z 면 fj) 의 전단응력 τ_rz = μ (∂u/∂z + ∂w/∂r)
   auto tau_rz = [&](int fi, int fj) {
@@ -390,7 +428,30 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
       const double u_l = 0.5 * (U(u, i - 1, j, t) + U(u, i, j, t));
       const double u_r = 0.5 * (U(u, i, j, t) + U(u, i + 1, j, t));
       double conv_r, conv_z;
-      if (!limited) {
+      if (consistent) {
+        // r 면 (셀 c 중심): 면 c 와 c+1 사이. z 면 (꼭짓점 fj): u 면 fj−1 과 fj 사이.
+        auto r_face = [&](int c, double a, double coef) {
+          const bool hm = u_r_ok(c - 1), hp = u_r_ok(c + 2);
+          return Face{coef, a,
+                      upwind(a, RU(c - 1, j), hm, RU(c, j), RU(c + 1, j), RU(c + 2, j), hp),
+                      a >= 0.0 ? RU(c, j) : RU(c + 1, j),
+                      upwind(a, hm ? U(u, c - 1, j, t) : 0.0, hm, U(u, c, j, t), U(u, c + 1, j, t),
+                             hp ? U(u, c + 2, j, t) : 0.0, hp)};
+        };
+        auto z_face = [&](int fj, double coef) {
+          const double a = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
+          const bool hm = u_z_ok(fj - 2), hp = u_z_ok(fj + 1);
+          return Face{coef, a,
+                      upwind(a, RU(i, fj - 2), hm, RU(i, fj - 1), RU(i, fj), RU(i, fj + 1), hp),
+                      a >= 0.0 ? RU(i, fj - 1) : RU(i, fj),
+                      upwind(a, hm ? U(u, i, fj - 2, t) : 0.0, hm, U(u, i, fj - 1, t), U(u, i, fj, t),
+                             hp ? U(u, i, fj + 1, t) : 0.0, hp)};
+        };
+        const Face f[4] = {r_face(i, u_r, m_r / (m_f * g.dr)), r_face(i - 1, u_l, -m_l / (m_f * g.dr)),
+                           z_face(j + 1, 1.0 / g.dz), z_face(j, -1.0 / g.dz)};
+        conv_r = consistent_accel(f, m.rho_u(i, j), u(i, j));
+        conv_z = 0.0;
+      } else if (!limited) {
         conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
         auto flux_z = [&](int fj) {
           const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
@@ -443,7 +504,30 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
       const double w_s = 0.5 * (W(w, i, j - 1, t) + W(w, i, j, t));
       const double w_n = 0.5 * (W(w, i, j, t) + W(w, i, j + 1, t));
       double conv_r, conv_z;
-      if (!limited) {
+      if (consistent) {
+        // r 면 (꼭짓점 fi): w 면 fi−1 과 fi 사이. z 면 (셀 c 중심): w 면 c 와 c+1 사이.
+        auto r_face = [&](int fi, double coef) {
+          const double a = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
+          const bool hm = w_r_ok(fi - 2), hp = w_r_ok(fi + 1);
+          return Face{coef, a,
+                      upwind(a, RW(fi - 2, j), hm, RW(fi - 1, j), RW(fi, j), RW(fi + 1, j), hp),
+                      a >= 0.0 ? RW(fi - 1, j) : RW(fi, j),
+                      upwind(a, hm ? W(w, fi - 2, j, t) : 0.0, hm, W(w, fi - 1, j, t), W(w, fi, j, t),
+                             hp ? W(w, fi + 1, j, t) : 0.0, hp)};
+        };
+        auto z_face = [&](int c, double a, double coef) {
+          const bool hm = w_z_ok(c - 1), hp = w_z_ok(c + 2);
+          return Face{coef, a,
+                      upwind(a, RW(i, c - 1), hm, RW(i, c), RW(i, c + 1), RW(i, c + 2), hp),
+                      a >= 0.0 ? RW(i, c) : RW(i, c + 1),
+                      upwind(a, hm ? W(w, i, c - 1, t) : 0.0, hm, W(w, i, c, t), W(w, i, c + 1, t),
+                             hp ? W(w, i, c + 2, t) : 0.0, hp)};
+        };
+        const Face f[4] = {r_face(i + 1, m_e / (m_c * g.dr)), r_face(i, -m_w / (m_c * g.dr)),
+                           z_face(j, w_n, 1.0 / g.dz), z_face(j - 1, w_s, -1.0 / g.dz)};
+        conv_r = consistent_accel(f, m.rho_w(i, j), w(i, j));
+        conv_z = 0.0;
+      } else if (!limited) {
         auto flux_r = [&](int fi) {
           const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
           const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
@@ -518,6 +602,7 @@ void FlowSolver::step(double dt) {
   const double t = t_;
   const Array2D u0 = u_, w0 = w_;
   Array2D fu, fw;
+  conv_dt_ = dt;  // 세 단계 모두 Δt 짜리 전진 오일러의 볼록 결합
 
   auto combine = [&](Array2D& u, Array2D& w, double a0, double a1) {
     // u ← a0 u0 + a1 (u + dt f), 계산하는 면만
@@ -547,6 +632,7 @@ void FlowSolver::step(double dt) {
   apply_boundary(u_, w_, t + dt);
   project(u_, w_, t + 0.5 * dt, t + dt, phi_[2]);
 
+  conv_dt_ = 0.0;
   t_ = t + dt;
   stats_.steps += 1;
 }
@@ -689,7 +775,9 @@ void FlowSolver::step_implicit(double dt) {
 
   // 명시적 부분 (시각 t): 대류 + 중력·원천
   Array2D fu, fw;
+  conv_dt_ = dt;
   rhs(u_, w_, t_, fu, fw, true, false, true);
+  conv_dt_ = 0.0;
   // 점성 부분 (시각 t1): V(u) = A u + c
   if (!visc_valid_ || (p_.material->time_dependent() && visc_time_ != t1)) {
     viscous_matrix(t1, visc_);

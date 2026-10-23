@@ -35,21 +35,24 @@ TestReport p3_report(const std::string& id, const std::string& title) {
   return rep;
 }
 
-// 새 대류 방식(제한자, §1.3 "2상용 대류 방식과 그 검증", 기준 고정 8ffed34) 으로 다시 하는 판정 시험
+// 새 대류 방식 (§1.3 "2상용 대류 방식과 그 검증", 기준 고정 8ffed34) 으로 다시 하는 판정 시험.
+// 2026-10-23: 방식 A (제한자) 만으로는 2-C 가 불통과 (validation/records/WS-2026-10-23-limiter.md) 여서
+// 방식 B (제한자 + 질량–운동량 일관 수송, flow::Convection::Consistent) 로 바꾼다. 기준은 그대로.
 constexpr const char* kLimiterCommit = "8ffed34";
+constexpr flow::Convection kNewScheme = flow::Convection::Consistent;
 
-flow::SolverOptions convection_options(bool limiter) {
+flow::SolverOptions convection_options(bool new_scheme) {
   flow::SolverOptions o;
-  if (limiter) o.convection = flow::Convection::VanLeer;
+  if (new_scheme) o.convection = kNewScheme;
   return o;
 }
 
-void mark_limiter(TestReport& rep, bool limiter) {
-  if (!limiter) return;
-  rep.id += "(lim)";
+void mark_limiter(TestReport& rep, bool new_scheme) {
+  if (!new_scheme) return;
+  rep.id += "(B)";
   rep.criteria_commit = kLimiterCommit;
-  rep.notes.push_back("re-run with van Leer limiter momentum convection (03 section 1.3, locked 8ffed34); "
-                      "criteria unchanged");
+  rep.notes.push_back("re-run with scheme B: van Leer limiter + consistent mass-momentum transport "
+                      "(03 section 1.3, locked 8ffed34); criteria unchanged");
 }
 
 Criterion all_at_most(const std::vector<GridRun>& runs, const std::string& key, double limit) {
@@ -537,7 +540,7 @@ TestReport run_2f(bool quick, bool limiter) {
 }
 
 // ---------------------------------------------------------------- 2-D
-// 2026-10-23 보고만 → 판정 시험으로 변경 (03 §1.3, 기준 고정 8ffed34). 대류는 제한자 방식.
+// 2026-10-23 보고만 → 판정 시험으로 변경 (03 §1.3, 기준 고정 8ffed34). 대류는 새 방식 (B).
 // 이전 보고만 실행의 기록은 validation/records/WS-2026-10-22.md 에 있다.
 TestReport run_2d(bool quick) {
   TestReport rep = p3_report("2-D", "Axisymmetric water column collapse (stability)");
@@ -615,15 +618,15 @@ TestReport run_2d(bool quick) {
   }
   rep.notes.push_back("speed limit = 3 sqrt(2 g 2a) = " + fmt(v_limit) + " m/s (3 x free fall from the column height)");
   rep.notes.push_back("front position vs Martin & Moyce [R-17] is report only (data not verified)");
-  rep.notes.push_back("van Leer limiter momentum convection; adaptive dt = min(0.1 dx / sqrt(g a), 0.25 dx / max|u|)");
+  rep.notes.push_back("scheme B convection (limiter + consistent mass-momentum transport); adaptive dt = min(0.1 dx / sqrt(g a), 0.25 dx / max|u|)");
   conclude(rep, quick);
   return rep;
 }
 
 // ---------------------------------------------------------------- 2-H
-// 새 대류 방식의 정확도: 1-C 와 1-A(b) 를 조건 그대로, 대류만 제한자로 (03 §1.3, 기준 고정 8ffed34)
+// 새 대류 방식의 정확도: 1-C 와 1-A(b) 를 조건 그대로, 대류만 새 방식 (B) 으로 (03 §1.3, 기준 고정 8ffed34)
 TestReport run_2h(bool quick) {
-  TestReport rep = p3_report("2-H", "Limiter convection accuracy: 1-C and 1-A(b) re-solved");
+  TestReport rep = p3_report("2-H", "New convection scheme accuracy: 1-C and 1-A(b) re-solved");
   rep.criteria_commit = kLimiterCommit;
   const std::vector<int> grids = quick ? std::vector<int>{16, 32} : std::vector<int>{32, 64, 128, 256};
   for (const char* which : {"1-C", "1-A(b)"}) {
@@ -631,8 +634,8 @@ TestReport run_2h(bool quick) {
     for (int n : grids) {
       GridRun run;
       try {
-        run = std::string(which) == "1-C" ? run_1c_grid(n, flow::Convection::VanLeer)
-                                          : run_1a_grid(n, true, flow::Convection::VanLeer);
+        run = std::string(which) == "1-C" ? run_1c_grid(n, kNewScheme)
+                                          : run_1a_grid(n, true, kNewScheme);
       } catch (const std::exception& e) {
         run.n = n;
         run.failure = std::string("FAILED_EXCEPTION ") + e.what();
@@ -659,7 +662,8 @@ TestReport run_2h(bool quick) {
     rep.runs.insert(rep.runs.end(), runs.begin(), runs.end());
   }
   rep.notes.push_back("conditions as in 03 sections 1.1 1-C and 1-A(b); only the momentum convection changes "
-                      "(van Leer limiter on the transported velocity, centred advecting velocity)");
+                      "(scheme B: van Leer limited velocity and density on the faces, centred advecting velocity, "
+                      "consistent mass-momentum update)");
   conclude(rep, quick);
   return rep;
 }

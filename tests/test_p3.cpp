@@ -153,9 +153,43 @@ void test_limiter_no_new_extrema() {
     return std::max(-lo, hi - 1.0);  // [0, 1] 밖으로 나간 양
   };
   const double over_vl = run(flow::Convection::VanLeer);
+  const double over_b = run(flow::Convection::Consistent);
+  expect(over_b <= 1e-12, "scheme B (consistent) makes no new extrema (" + std::to_string(over_b) + ")");
   const double over_c = run(flow::Convection::Central);
   expect(over_vl <= 1e-12, "van Leer convection makes no new extrema (" + std::to_string(over_vl) + ")");
   expect(over_c > 1e-3, "central convection overshoots on the same step (" + std::to_string(over_c) + ")");
+}
+
+// 방식 B: 가벼운 유체(ρ = 1) 가 무거운 유체(ρ = 1000) 쪽으로 흘러들 때 무거운 쪽 가로 속도를 거의 바꾸지 못해야 한다.
+// 아래 절반 무거움 (u = 0), 위 절반 가벼움 (u = 1), 균일한 하강 흐름 w = −0.05 (발산 0, 압력 0).
+// 한 단계 뒤 무거운 쪽 u 의 최대 변화를 방식 A (속도 그대로 수송) 와 비교한다.
+void test_consistent_light_cannot_drag_heavy() {
+  auto run = [](flow::Convection c) {
+    flow::Problem pb;
+    pb.grid = Grid(Geometry::Planar, 4, 32, 0.0, 0.125, 0.0, 1.0);
+    pb.bc.r_min.kind = pb.bc.r_max.kind = flow::BoundaryKind::Periodic;
+    pb.bc.z_min.kind = pb.bc.z_max.kind = flow::BoundaryKind::Periodic;
+    pb.material = std::make_shared<flow::SmoothMaterial>(
+        [](double, double z, double) { return (z > 0.25 && z < 0.75) ? 1.0 : 1000.0; },
+        [](double, double, double) { return 0.0; }, false);
+    flow::SolverOptions o;
+    o.convection = c;
+    flow::FlowSolver s(pb, o);
+    auto u0 = [](double, double z) { return (z > 0.25 && z < 0.75) ? 1.0 : 0.0; };
+    s.initialize(0.0, u0, [](double, double) { return -0.05; });
+    s.step(0.2 / 32.0);
+    double change = 0.0;
+    const Grid& g = s.grid();
+    for (int i = 0; i < g.nr; ++i) {
+      for (int j = 0; j < g.nz; ++j) {
+        if (g.zc(j) < 0.25) change = std::max(change, std::abs(s.u()(i, j)));
+      }
+    }
+    return change;
+  };
+  const double a = run(flow::Convection::VanLeer), b = run(flow::Convection::Consistent);
+  expect(a > 1e-3, "scheme A: light fluid drags the heavy side (" + std::to_string(a) + ")");
+  expect(b < 0.01 * a, "scheme B: heavy side barely moves (" + std::to_string(b) + " vs A " + std::to_string(a) + ")");
 }
 
 }  // namespace
@@ -167,6 +201,7 @@ int main() {
   test_rotation(Geometry::Axisymmetric);
   test_refuses_bad_input();
   test_limiter_no_new_extrema();
+  test_consistent_light_cannot_drag_heavy();
   std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   return g_failures == 0 ? 0 : 1;
 }

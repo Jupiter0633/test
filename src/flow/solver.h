@@ -71,7 +71,17 @@ struct Problem {
 // VanLeer: 수송되는 속도를 van Leer 제한자로 상류 쪽에 치우쳐 보간한다 (P3 2상용, 03 §1.3 2-H).
 //   이동시키는 속도는 중심 평균 그대로이다. 매끈한 곳은 2차, 극값 근처는 1차 상류.
 //   격자 끝에서 상류 두 번째 값이 없으면 그 면은 중심 평균을 쓴다.
-enum class Convection { Central, VanLeer };
+// Consistent: VanLeer 에 질량–운동량 일관 수송을 더한 방식 (P3 방식 B, 03 §1.3).
+//   운동량 제어체적의 각 면 질량 플럭스 ṁ = ρ_면 · a (ρ_면 도 같은 제한자로 보간) 로 운동량을 옮기고,
+//   가속도 = −Σ ṁ (u_면 − u_중심) / (V ρ_분모)   (연속 극한에서 a·∇u 와 같음).
+//   물–공기 경계에서 가벼운 공기 쪽 면은 작은 ṁ 만 가져 물 속도를 거의 바꾸지 못한다.
+//   ρ_분모: 보통은 그 칸의 ρ. 2 배 넘게 무거운 유체가 들어오는 칸 (예: 물이 들어오는 공기 칸) 은
+//   같은 ṁ 로 한 단계 갱신한 밀도 ρ* = ρ − Δt ∇·ṁ 로 나누어 속도가 질량 가중 평균으로 유지되게 한다
+//   (ρ 로 나누면 유입률 ρ_물/ρ_공기 배로 굳어 불안정). ρ* 를 모든 칸에 쓰면 매끈한 변수 밀도에서
+//   시간 1차 오차가 생겨 (2026-10-23 개발 확인) 이렇게 나눈다.
+//   제한된 ṁ 로 ρ* < ρ/2 가 되는 칸은 상류 밀도(1차) ṁ 로 바꾼다 (양수 보장).
+//   Δt 는 step / step_implicit 의 시간 간격 (압력 출력 compute_pressure 에서는 0).
+enum class Convection { Central, VanLeer, Consistent };
 
 struct SolverOptions {
   double projection_tolerance = 1e-12;
@@ -169,6 +179,8 @@ class FlowSolver {
   // 단위 질량당 가속도. convection/viscous/forces(중력·원천) 를 골라 넣을 수 있다 (기본: 전부).
   void rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, Array2D& fw,
            bool convection = true, bool viscous = true, bool forces = true);
+  // Convection::Consistent 의 밀도 갱신에 쓰는 시간 간격 (step 중에만 0 이 아님)
+  double conv_dt_ = 0.0;
   // 점성 항 V(u) = A u + c 의 A 를 기존 이산식(rhs 의 점성 부분)을 탐침해 희소 행렬로 만든다.
   // 미지수 순서: u 면 (i*nz + j), 그 뒤 w 면 (nu + i*(nz+1) + j).
   void viscous_matrix(double t, CsrMatrix& a);
