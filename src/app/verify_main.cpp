@@ -20,6 +20,7 @@
 #include "verify/p2_cases.h"
 #include "verify/p3_cases.h"
 #include "verify/p4_cases.h"
+#include "verify/p5_cases.h"
 
 namespace fs = std::filesystem;
 using namespace hcw;
@@ -49,6 +50,11 @@ std::string render(const TestReport& rep, const std::string& header) {
     for (const auto& k : keys) {
       const auto it = run.metrics.find(k);
       if (it != run.metrics.end()) o << "  " << k << " = " << it->second << "\n";
+    }
+    // P5 (구조) 는 압력 해법을 쓰지 않으므로 해법 통계 대신 실행 시간만
+    if (rep.phase == "P5") {
+      o << "  wall time " << run.seconds << " s\n";
+      continue;
     }
     o << "  poisson: solves " << run.stats.poisson_solves << ", total iterations "
       << run.stats.poisson_iterations << ", refinements " << run.stats.poisson_refinements
@@ -120,11 +126,12 @@ void save(const std::string& phase, const std::string& id, const std::string& te
 }
 
 void usage() {
-  std::cout << "usage: hcw_verify <test | P1 | P2 | P3 | P4> [--quick] [--threads N]\n"
+  std::cout << "usage: hcw_verify <test | P1 | P2 | P3 | P4 | P5> [--quick] [--threads N]\n"
                "  P1 tests: 1A, 1A-a, 1A-b, 1B, 1C, 1D   ('all' = P1, kept for compatibility)\n"
                "  P2 tests: 1E, 1F, 1G, 1H\n"
                "  P3 tests: 2A, 2B, 2C, 2D, 2F, 2H, 2A-B, 2C-B, 2F-B (-B: new convection scheme B)\n"
                "  P4 tests: 2T, 3A, 3E, 3I (report only), 3B, 3C, 3F, 3G   (3-D is reported inside the entry tests)\n"
+               "  P5 tests: 4A, 4B, 4C, 4E, 4F, 4G, 4H, 4I, 4E-c (report only)   (structure only; 4-D is not run, D-26)\n"
                "  --quick   reduced grids for a fast functional check (no verdict)\n"
                "  --threads N   use N CPU threads (default 1, or the HCW_THREADS environment\n"
                "                variable). Results are bitwise identical for any N.\n"
@@ -172,6 +179,10 @@ int main(int argc, char** argv) {
   else if (what == "P2") tests = {"1E", "1F", "1G", "1H"};
   else if (what == "P3") tests = {"2A", "2B", "2C", "2D", "2F", "2H", "2A-B", "2C-B", "2F-B"};
   else if (what == "P4") tests = {"2T", "3A", "3B", "3C", "3E", "3F", "3G", "3I"};
+  else if (what == "P5") tests = {"4A", "4B", "4C", "4E", "4E-c", "4F", "4G", "4H", "4I"};
+  else if (what == "4A" || what == "4B" || what == "4C" || what == "4E" || what == "4E-c" || what == "4F" || what == "4G" ||
+           what == "4H" || what == "4I")
+    tests = {what};
   else if (what == "1A") tests = {"1A-a", "1A-b"};
   else if (what == "1A-a" || what == "1A-b" || what == "1B" || what == "1C" || what == "1D" ||
            what == "1E" || what == "1F" || what == "1G" || what == "1H" || what == "2A" || what == "2B" || what == "2C" || what == "2D" || what == "2F" ||
@@ -214,6 +225,15 @@ int main(int argc, char** argv) {
     if (t == "3F") rep = run_3f(quick);
     if (t == "3G") rep = run_3g(quick);
     if (t == "3I") rep = run_3i(quick);
+    if (t == "4A") rep = run_4a(quick);
+    if (t == "4B") rep = run_4b(quick);
+    if (t == "4C") rep = run_4c(quick);
+    if (t == "4E") rep = run_4e(quick);
+    if (t == "4E-c") rep = run_4e_c(quick);
+    if (t == "4F") rep = run_4f(quick);
+    if (t == "4G") rep = run_4g(quick);
+    if (t == "4H") rep = run_4h(quick);
+    if (t == "4I") rep = run_4i(quick);
     const std::string text = render(rep, header);
     std::cout << text;
     if (!quick) save(rep.phase, rep.id, text, quick);
