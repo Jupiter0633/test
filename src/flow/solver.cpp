@@ -220,17 +220,18 @@ void FlowSolver::build_operator(const MaterialArrays& m, Operator& op,
   // 컷셀: 면 계수에 열린 비율을 곱한다. 막힌 면(0)은 연결하지 않는다.
   // 물체가 없으면 비율이 정확히 1 이라 P1 과 같은 값이 된다.
   for (int i = iu_lo_; i < iu_hi_; ++i) {
-    const double area = g.metric(g.rf(i)) * g.dz;
+    const double mf = g.metric(g.rf(i));
     for (int j = 0; j < g.nz; ++j) {
+      const double area = mf * g.dzc(j);
       const double open = gm.open_u(i, j);
-      if (open > 0.0) couple(cell(i - 1, j), cell(i, j), open * (area / (m.rho_u(i, j) * g.dr)));
+      if (open > 0.0) couple(cell(i - 1, j), cell(i, j), open * (area / (m.rho_u(i, j) * g.drn(i))));
     }
   }
   for (int i = 0; i < g.nr; ++i) {
-    const double area = g.metric(g.rc(i)) * g.dr;
+    const double area = g.metric(g.rc(i)) * g.drc(i);
     for (int j = jw_lo_; j < jw_hi_; ++j) {
       const double open = gm.open_w(i, j);
-      if (open > 0.0) couple(cell(i, j - 1), cell(i, j), open * (area / (m.rho_w(i, j) * g.dz)));
+      if (open > 0.0) couple(cell(i, j - 1), cell(i, j), open * (area / (m.rho_w(i, j) * g.dzn(j))));
     }
   }
   // 고체로 가득 찬 셀은 다른 셀과 연결되지 않는 항등 행 (해 0)
@@ -273,10 +274,10 @@ void FlowSolver::face_flux_rhs(const Array2D& fu, const Array2D& fw, double body
   const Array2D& ow = geom_.open_w;
   b.assign(static_cast<std::size_t>(g.nr) * g.nz, 0.0);
   for (int i = 0; i < g.nr; ++i) {
-    const double aw = g.metric(g.rf(i)) * g.dz;
-    const double ae = g.metric(g.rf(i + 1)) * g.dz;
-    const double az = g.metric(g.rc(i)) * g.dr;
+    const double mw = g.metric(g.rf(i)), me = g.metric(g.rf(i + 1));
+    const double az = g.metric(g.rc(i)) * g.drc(i);
     for (int j = 0; j < g.nz; ++j) {
+      const double aw = mw * g.dzc(j), ae = me * g.dzc(j);
       const std::size_t c = static_cast<std::size_t>(i) * g.nz + j;
       if (!geom_.active[c]) continue;
       const double out = ae * ou(i + 1, j) * fu(i + 1, j) - aw * ou(i, j) * fu(i, j) +
@@ -344,12 +345,12 @@ void FlowSolver::project(Array2D& u, Array2D& w, double t_rho, double t_bc, Pote
   };
   for (int i = iu_lo_; i < iu_hi_; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      u(i, j) -= diff(i, j, i - 1, j) / (m.rho_u(i, j) * g.dr);
+      u(i, j) -= diff(i, j, i - 1, j) / (m.rho_u(i, j) * g.drn(i));
     }
   }
   for (int i = 0; i < g.nr; ++i) {
     for (int j = jw_lo_; j < jw_hi_; ++j) {
-      w(i, j) -= diff(i, j, i, j - 1) / (m.rho_w(i, j) * g.dz);
+      w(i, j) -= diff(i, j, i, j - 1) / (m.rho_w(i, j) * g.dzn(j));
     }
   }
   if (periodic_r_) {
@@ -446,8 +447,8 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
 
   // 꼭짓점 (r 면 fi, z 면 fj) 의 전단응력 τ_rz = μ (∂u/∂z + ∂w/∂r)
   auto tau_rz = [&](int fi, int fj) {
-    return m.mu_corner(fi, fj) * ((U(u, fi, fj, t) - U(u, fi, fj - 1, t)) / g.dz +
-                                  (W(w, fi, fj, t) - W(w, fi - 1, fj, t)) / g.dr);
+    return m.mu_corner(fi, fj) * ((U(u, fi, fj, t) - U(u, fi, fj - 1, t)) / g.dzn(fj) +
+                                  (W(w, fi, fj, t) - W(w, fi - 1, fj, t)) / g.drn(fi));
   };
 
   // r 방향 운동량 (r 면)
@@ -480,18 +481,18 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                         upwind(a, hm ? U(u, i, fj - 2, t) : 0.0, hm, U(u, i, fj - 1, t), U(u, i, fj, t),
                                hp ? U(u, i, fj + 1, t) : 0.0, hp)};
           };
-          const Face f[4] = {r_face(i, u_r, m_r / (m_f * g.dr)), r_face(i - 1, u_l, -m_l / (m_f * g.dr)),
-                             z_face(j + 1, 1.0 / g.dz), z_face(j, -1.0 / g.dz)};
+          const Face f[4] = {r_face(i, u_r, m_r / (m_f * g.drn(i))), r_face(i - 1, u_l, -m_l / (m_f * g.drn(i))),
+                             z_face(j + 1, 1.0 / g.dzc(j)), z_face(j, -1.0 / g.dzc(j))};
           conv_r = consistent_accel(f, m.rho_u(i, j), u(i, j));
           conv_z = 0.0;
         } else if (!limited) {
-          conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.dr);
+          conv_r = (m_r * u_r * u_r - m_l * u_l * u_l) / (m_f * g.drn(i));
           auto flux_z = [&](int fj) {
             const double uc = 0.5 * (U(u, i, fj - 1, t) + U(u, i, fj, t));
             const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
             return uc * wc;
           };
-          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dzc(j);
         } else {
           // 셀 c (면 c 와 c+1 사이) 의 r 플럭스: 이동 속도 = 중심 평균, 수송 u = 제한 보간
           auto flux_r = [&](int c, double a) {
@@ -500,7 +501,7 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                                     u_r_ok(c + 2) ? U(u, c + 2, j, t) : 0.0, u_r_ok(c + 2));
             return a * q;
           };
-          conv_r = (m_r * flux_r(i, u_r) - m_l * flux_r(i - 1, u_l)) / (m_f * g.dr);
+          conv_r = (m_r * flux_r(i, u_r) - m_l * flux_r(i - 1, u_l)) / (m_f * g.drn(i));
           auto flux_z = [&](int fj) {
             const double wc = 0.5 * (W(w, i - 1, fj, t) + W(w, i, fj, t));
             const double q = upwind(wc, u_z_ok(fj - 2) ? U(u, i, fj - 2, t) : 0.0, u_z_ok(fj - 2),
@@ -508,14 +509,14 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                                     u_z_ok(fj + 1) ? U(u, i, fj + 1, t) : 0.0, u_z_ok(fj + 1));
             return q * wc;
           };
-          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dz;
+          conv_z = (flux_z(j + 1) - flux_z(j)) / g.dzc(j);
         }
 
         auto tau_rr = [&](int c) {
-          return 2.0 * m.mu_cell(wrap_r(c), j) * (U(u, c + 1, j, t) - U(u, c, j, t)) / g.dr;
+          return 2.0 * m.mu_cell(wrap_r(c), j) * (U(u, c + 1, j, t) - U(u, c, j, t)) / g.drc(wrap_r(c));
         };
-        const double visc_r = (m_r * tau_rr(i) - m_l * tau_rr(i - 1)) / (m_f * g.dr);
-        const double visc_z = (tau_rz(i, j + 1) - tau_rz(i, j)) / g.dz;
+        const double visc_r = (m_r * tau_rr(i) - m_l * tau_rr(i - 1)) / (m_f * g.drn(i));
+        const double visc_z = (tau_rz(i, j + 1) - tau_rz(i, j)) / g.dzc(j);
         const double r_f = g.rf(i);
         const double hoop = axisym ? -2.0 * m.mu_u(i, j) * u(i, j) / (r_f * r_f) : 0.0;
 
@@ -558,8 +559,8 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                         upwind(a, hm ? W(w, i, c - 1, t) : 0.0, hm, W(w, i, c, t), W(w, i, c + 1, t),
                                hp ? W(w, i, c + 2, t) : 0.0, hp)};
           };
-          const Face f[4] = {r_face(i + 1, m_e / (m_c * g.dr)), r_face(i, -m_w / (m_c * g.dr)),
-                             z_face(j, w_n, 1.0 / g.dz), z_face(j - 1, w_s, -1.0 / g.dz)};
+          const Face f[4] = {r_face(i + 1, m_e / (m_c * g.drc(i))), r_face(i, -m_w / (m_c * g.drc(i))),
+                             z_face(j, w_n, 1.0 / g.dzn(j)), z_face(j - 1, w_s, -1.0 / g.dzn(j))};
           conv_r = consistent_accel(f, m.rho_w(i, j), w(i, j));
           conv_z = 0.0;
         } else if (!limited) {
@@ -568,8 +569,8 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
             const double wc = 0.5 * (W(w, fi - 1, j, t) + W(w, fi, j, t));
             return uc * wc;
           };
-          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
-          conv_z = (w_n * w_n - w_s * w_s) / g.dz;
+          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.drc(i));
+          conv_z = (w_n * w_n - w_s * w_s) / g.dzn(j);
         } else {
           auto flux_r = [&](int fi) {
             const double uc = 0.5 * (U(u, fi, j - 1, t) + U(u, fi, j, t));
@@ -578,7 +579,7 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                                     w_r_ok(fi + 1) ? W(w, fi + 1, j, t) : 0.0, w_r_ok(fi + 1));
             return uc * q;
           };
-          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.dr);
+          conv_r = (m_e * flux_r(i + 1) - m_w * flux_r(i)) / (m_c * g.drc(i));
           // 셀 c (z 면 c 와 c+1 사이) 의 z 플럭스
           auto flux_z = [&](int c, double a) {
             const double q = upwind(a, w_z_ok(c - 1) ? W(w, i, c - 1, t) : 0.0, w_z_ok(c - 1),
@@ -586,14 +587,14 @@ void FlowSolver::rhs(const Array2D& u, const Array2D& w, double t, Array2D& fu, 
                                     w_z_ok(c + 2) ? W(w, i, c + 2, t) : 0.0, w_z_ok(c + 2));
             return a * q;
           };
-          conv_z = (flux_z(j, w_n) - flux_z(j - 1, w_s)) / g.dz;
+          conv_z = (flux_z(j, w_n) - flux_z(j - 1, w_s)) / g.dzn(j);
         }
 
-        const double visc_r = (m_e * tau_rz(i + 1, j) - m_w * tau_rz(i, j)) / (m_c * g.dr);
+        const double visc_r = (m_e * tau_rz(i + 1, j) - m_w * tau_rz(i, j)) / (m_c * g.drc(i));
         auto tau_zz = [&](int c) {
-          return 2.0 * m.mu_cell(i, wrap_z(c)) * (W(w, i, c + 1, t) - W(w, i, c, t)) / g.dz;
+          return 2.0 * m.mu_cell(i, wrap_z(c)) * (W(w, i, c + 1, t) - W(w, i, c, t)) / g.dzc(wrap_z(c));
         };
-        const double visc_z = (tau_zz(j) - tau_zz(j - 1)) / g.dz;
+        const double visc_z = (tau_zz(j) - tau_zz(j - 1)) / g.dzn(j);
 
         double f = (convection ? -(conv_r + conv_z) : 0.0) +
                    (viscous ? (visc_r + visc_z) / m.rho_w(i, j) : 0.0) +
@@ -718,8 +719,8 @@ void FlowSolver::compute_pressure(Array2D& p) {
       const std::size_t k = static_cast<std::size_t>(i) * g.nz + j;
       p(i, j) = x.hi[k] + x.lo[k];
       if (!geom_.active[k]) continue;  // 고체 셀은 평균에서 뺀다
-      sum += p(i, j) * g.cell_volume(i);
-      vol += g.cell_volume(i);
+      sum += p(i, j) * g.cell_volume(i, j);
+      vol += g.cell_volume(i, j);
     }
   }
   const double mean = sum / vol;
@@ -736,7 +737,7 @@ double FlowSolver::max_divergence() const {
   double worst = 0.0;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      worst = std::max(worst, std::abs(b[static_cast<std::size_t>(i) * g.nz + j] / g.cell_volume(i)));
+      worst = std::max(worst, std::abs(b[static_cast<std::size_t>(i) * g.nz + j] / g.cell_volume(i, j)));
     }
   }
   return worst;
@@ -971,12 +972,12 @@ void FlowSolver::step_implicit(double dt) {
       }
       if (k < nu) {
         const int i = k / nz, j = k % nz;
-        const double grad = (p_inc_(i, j) - p_inc_(i - 1, j)) / (m.rho_u(i, j) * g.dr);
+        const double grad = (p_inc_(i, j) - p_inc_(i - 1, j)) / (m.rho_u(i, j) * g.drn(i));
         const double hist = bdf2 ? (c1 * u_(i, j) - c2 * u_prev_(i, j)) / dt : u_(i, j) / dt;
         b[k] = hist + fu(i, j) + cu(i, j) - grad;
       } else {
         const int i = (k - nu) / (nz + 1), j = (k - nu) % (nz + 1);
-        const double grad = (p_inc_(i, j) - p_inc_(i, j - 1)) / (m.rho_w(i, j) * g.dz);
+        const double grad = (p_inc_(i, j) - p_inc_(i, j - 1)) / (m.rho_w(i, j) * g.dzn(j));
         const double hist = bdf2 ? (c1 * w_(i, j) - c2 * w_prev_(i, j)) / dt : w_(i, j) / dt;
         b[k] = hist + fw(i, j) + cw(i, j) - grad;
       }
@@ -1059,7 +1060,7 @@ void FlowSolver::step_implicit(double dt) {
                                    ", " + std::to_string(j) + "), p = " + std::to_string(pa) +
                                    ", air fraction " + std::to_string(m.air_fraction(i, j)));
         }
-        const double psi_v = m.air_fraction(i, j) / (p_.air_kappa * p_use) * g.cell_volume(i);
+        const double psi_v = m.air_fraction(i, j) / (p_.air_kappa * p_use) * g.cell_volume(i, j);
         psi_vol_[kc] = psi_v / (tau * tau);
         // 직전 단계에 압력이 없던 셀 (물체 옆에서 새로 생김) 과 하한이 걸린 셀 (이번 또는 직전 압력이
         // 하한 아래) 은 이력 항을 쓰지 않는다 (그 셀만 1 차). 하한으로 키운 ψ 에 실제 압력 차를 곱하면
@@ -1116,14 +1117,14 @@ void FlowSolver::step_implicit(double dt) {
       for (int j = 0; j < nz; ++j) {
         if (pgeom_.open_u(i, j) <= 0.0) continue;
         const std::size_t k1 = static_cast<std::size_t>(i) * nz + j;
-        un(i, j) -= diff(k1, k1 - static_cast<std::size_t>(nz)) / (m.rho_u(i, j) * g.dr);
+        un(i, j) -= diff(k1, k1 - static_cast<std::size_t>(nz)) / (m.rho_u(i, j) * g.drn(i));
       }
     }
     for (int i = 0; i < g.nr; ++i) {
       for (int j = jw_lo_; j < jw_hi_; ++j) {
         if (pgeom_.open_w(i, j) <= 0.0) continue;
         const std::size_t k1 = static_cast<std::size_t>(i) * nz + j;
-        wn(i, j) -= diff(k1, k1 - 1) / (m.rho_w(i, j) * g.dz);
+        wn(i, j) -= diff(k1, k1 - 1) / (m.rho_w(i, j) * g.dzn(j));
       }
     }
   }
@@ -1138,10 +1139,10 @@ void FlowSolver::step_implicit(double dt) {
       const std::size_t k = static_cast<std::size_t>(i) * nz + j;
       if (!pg.active[k]) continue;
       // 회전형 항은 ∇·u = 0 을 전제로 하므로 압축성 공기에서는 쓰지 않는다
-      const double div = p_.air_kappa > 0.0 ? 0.0 : -b_raw[k] / g.cell_volume(i);
+      const double div = p_.air_kappa > 0.0 ? 0.0 : -b_raw[k] / g.cell_volume(i, j);
       p_inc_(i, j) += (phi_[0].hi[k] + phi_[0].lo[k]) / tau - m.mu_cell(i, j) * div;
-      sum += p_inc_(i, j) * g.cell_volume(i);
-      vol += g.cell_volume(i);
+      sum += p_inc_(i, j) * g.cell_volume(i, j);
+      vol += g.cell_volume(i, j);
     }
   }
   for (int i = 0; i < g.nr; ++i) {

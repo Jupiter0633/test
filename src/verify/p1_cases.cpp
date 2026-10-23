@@ -42,14 +42,14 @@ ErrorNorm velocity_error(const FlowSolver& s, const Fn2& u_exact, const Fn2& w_e
   ErrorNorm e;
   for (int i = 0; i <= g.nr; ++i) {
     if (!s.solves_u(i)) continue;
-    const double vol = g.metric(g.rf(i)) * g.dr * g.dz;
-    for (int j = 0; j < g.nz; ++j) e.add(s.u()(i, j) - u_exact(g.rf(i), g.zc(j)), vol);
+    for (int j = 0; j < g.nz; ++j) {
+      e.add(s.u()(i, j) - u_exact(g.rf(i), g.zc(j)), g.metric(g.rf(i)) * g.drn(i) * g.dzc(j));
+    }
   }
   for (int i = 0; i < g.nr; ++i) {
-    const double vol = g.metric(g.rc(i)) * g.dr * g.dz;
     for (int j = 0; j <= g.nz; ++j) {
       if (!s.solves_w(j)) continue;
-      e.add(s.w()(i, j) - w_exact(g.rc(i), g.zf(j)), vol);
+      e.add(s.w()(i, j) - w_exact(g.rc(i), g.zf(j)), g.metric(g.rc(i)) * g.drc(i) * g.dzn(j));
     }
   }
   return e;
@@ -60,20 +60,20 @@ ErrorNorm pressure_error(const Grid& g, const Array2D& p, const Fn2& p_exact) {
   double sum = 0.0, vol = 0.0;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      sum += p_exact(g.rc(i), g.zc(j)) * g.cell_volume(i);
-      vol += g.cell_volume(i);
+      sum += p_exact(g.rc(i), g.zc(j)) * g.cell_volume(i, j);
+      vol += g.cell_volume(i, j);
     }
   }
   const double mean_exact = sum / vol;
   double mean_num = 0.0;
   for (int i = 0; i < g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) mean_num += p(i, j) * g.cell_volume(i);
+    for (int j = 0; j < g.nz; ++j) mean_num += p(i, j) * g.cell_volume(i, j);
   }
   mean_num /= vol;
   ErrorNorm e;
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
-      e.add((p(i, j) - mean_num) - (p_exact(g.rc(i), g.zc(j)) - mean_exact), g.cell_volume(i));
+      e.add((p(i, j) - mean_num) - (p_exact(g.rc(i), g.zc(j)) - mean_exact), g.cell_volume(i, j));
     }
   }
   return e;
@@ -198,7 +198,7 @@ GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv) {
   opt.convection = conv;
   FlowSolver s(pb, opt);
   s.initialize(0.0, u_exact(0.0), w_exact(0.0));
-  advance_to(s, t_end, 0.064 * g.dr);
+  advance_to(s, t_end, 0.064 * g.dr_min());
 
   const ErrorNorm ev = velocity_error(s, u_exact(t_end), w_exact(t_end));
   Array2D p;
@@ -282,7 +282,7 @@ TestReport run_1b(bool quick) {
       FlowSolver s(pb);
       s.initialize(0.0, [](double, double) { return 0.0; },
                    [](double r, double) { return 1.0 - r * r; });
-      const double dt = 0.25 * g.dr * g.dr;
+      const double dt = 0.25 * g.dr_min() * g.dr_min();
       const long max_steps = static_cast<long>(20.0 / dt);
       bool steady = false;
       double change = 0.0;
@@ -306,14 +306,14 @@ TestReport run_1b(bool quick) {
       ErrorNorm norm;  // 해석해의 L2 크기 (상대오차용)
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) {
-          norm.add(w_ex(g.rc(i), 0.0), g.metric(g.rc(i)) * g.dr * g.dz);
+          norm.add(w_ex(g.rc(i), 0.0), g.metric(g.rc(i)) * g.drc(i) * g.dzc(j));
         }
       }
       double q = 0.0;
       for (int i = 0; i < g.nr; ++i) {
         double avg = 0.0;
         for (int j = 0; j < g.nz; ++j) avg += s.w()(i, j);
-        q += 2.0 * kPi * g.rc(i) * g.dr * avg / g.nz;
+        q += 2.0 * kPi * g.rc(i) * g.drc(i) * avg / g.nz;
       }
       run.metrics["velocity_L2"] = ev.l2();
       run.metrics["velocity_L2_relative"] = ev.l2() / norm.l2();
@@ -380,7 +380,7 @@ GridRun run_1c_grid(int n, flow::Convection conv) {
     opt.convection = conv;
     FlowSolver s(pb, opt);
     s.initialize(0.0, u_ex(0.0), v_ex(0.0));
-    advance_to(s, t_end, 0.2 * g.dr);
+    advance_to(s, t_end, 0.2 * g.dr_min());
     const ErrorNorm ev = velocity_error(s, u_ex(t_end), v_ex(t_end));
     Array2D p;
     s.compute_pressure(p);
@@ -439,7 +439,7 @@ TestReport run_1d(bool quick) {
           Problem pb;
           pb.grid = Grid(geom, n, n, 0.0, 1.0, 0.0, height);
           const Grid g = pb.grid;
-          const double zi = 0.5 + (centered ? 0.5 * g.dz : 0.0);
+          const double zi = 0.5 + (centered ? 0.5 * g.dz_min() : 0.0);
           pb.bc.r_min.kind = geom == Geometry::Axisymmetric ? BoundaryKind::Axis : BoundaryKind::Wall;
           pb.bc.r_max.kind = BoundaryKind::Wall;
           pb.bc.z_min.kind = pb.bc.z_max.kind = BoundaryKind::Wall;

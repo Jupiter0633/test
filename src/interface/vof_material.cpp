@@ -28,7 +28,7 @@ struct HalfWater {
           nr(i, j) = n[0];
           nz(i, j) = n[1];
           alpha(i, j) = solve_alpha(rectangle(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1)), n,
-                                    fc * g.cell_volume(i), g.geometry);
+                                    fc * g.cell_volume(i, j), g.geometry);
         }
       }
     });

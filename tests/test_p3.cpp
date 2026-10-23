@@ -78,7 +78,7 @@ void test_rotation(Geometry geom) {
     for (int j = 0; j < g.nz; ++j) {
       vof.f()(i, j) =
           geom == Geometry::Axisymmetric
-              ? verify::sphere_cell_volume(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1), 0.35, 0.15) / g.cell_volume(i)
+              ? verify::sphere_cell_volume(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1), 0.35, 0.15) / g.cell_volume(i, j)
               : (g.zc(j) < 0.4 + 0.3 * g.rc(i) ? 1.0 : 0.0);
     }
   }
@@ -141,7 +141,7 @@ void test_limiter_no_new_extrema() {
     flow::FlowSolver s(pb, o);
     s.initialize(0.0, [](double, double) { return 1.0; },
                  [](double x, double) { return (x > 0.25 && x < 0.5) ? 1.0 : 0.0; });
-    const double dt = 0.4 * pb.grid.dr;
+    const double dt = 0.4 * pb.grid.dr_min();
     double lo = 0.0, hi = 1.0;
     for (int k = 0; k < 40; ++k) {
       s.step(dt);

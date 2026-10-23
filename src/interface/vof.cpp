@@ -28,7 +28,7 @@ void Vof::reconstruct() {
         const Polygon cell = rectangle(g_.rf(i), g_.rf(i + 1), g_.zf(j), g_.zf(j + 1));
         nr_(i, j) = n[0];
         nz_(i, j) = n[1];
-        alpha_(i, j) = solve_alpha(cell, n, fd * g_.cell_volume(i), g_.geometry);
+        alpha_(i, j) = solve_alpha(cell, n, fd * g_.cell_volume(i, j), g_.geometry);
       }
     }
   });
@@ -48,21 +48,22 @@ void Vof::sweep_r(const flow::Array2D& qu, double dt, const std::vector<char>& c
   flow::Array2D fw(g_.nr + 1, g_.nz, 0.0);  // 물 플럭스 (Δt 동안의 체적, +r 방향)
   parallel::parallel_for(0, g_.nr + 1, parallel::kRowGrain, [&](int i_lo, int i_hi) {
     for (int i = i_lo; i < i_hi; ++i) {
-      const double area = g_.metric(g_.rf(i)) * g_.dz;
+      const double mf = g_.metric(g_.rf(i));
       for (int j = 0; j < g_.nz; ++j) {
+        const double area = mf * g_.dzc(j);
         const double q = qu(i, j);
         if (q == 0.0) continue;
         const int donor = q > 0.0 ? i - 1 : i;
         if (donor < 0 || donor >= g_.nr || !(area > 0.0)) {
           throw std::invalid_argument("VOF: nonzero flux through a domain boundary face");
         }
-        if (std::abs(q) / area * dt > 0.5 * g_.dr * (1.0 + 1e-12)) {
+        if (std::abs(q) / area * dt > 0.5 * g_.drc(donor) * (1.0 + 1e-12)) {
           throw std::invalid_argument("VOF: CFL > 0.5 in r");
         }
         // 띠 폭 d 를 띠의 (r 가중) 체적이 정확히 |q|Δt 가 되도록 고른다. 축대칭에서는
         // r_f d ∓ d²/2 = |q|Δt/Δz (상류가 안쪽이면 −, 바깥쪽이면 +). 그러면 물 플럭스 = 띠 안 물 체적으로,
         // 비율로 다시 맞출 필요가 없어 0 ≤ f ≤ 1 이 더 잘 지켜진다.
-        const double vs = std::abs(q) * dt / g_.dz;
+        const double vs = std::abs(q) * dt / g_.dzc(j);
         const double rf = g_.rf(i);
         double dist = vs;
         if (g_.geometry == flow::Geometry::Axisymmetric) {
@@ -77,8 +78,8 @@ void Vof::sweep_r(const flow::Array2D& qu, double dt, const std::vector<char>& c
   });
   parallel::parallel_for(0, g_.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
     for (int i = i_lo; i < i_hi; ++i) {
-      const double vol = g_.cell_volume(i);
       for (int j = 0; j < g_.nz; ++j) {
+        const double vol = g_.cell_volume(i, j);
         const double div = (qu(i + 1, j) - qu(i, j)) * dt;
         const double cc = c[static_cast<std::size_t>(i) * g_.nz + j] ? 1.0 : 0.0;
         f_(i, j) = (f_(i, j) * vol - (fw(i + 1, j) - fw(i, j)) + cc * div) / vol;
@@ -92,7 +93,7 @@ void Vof::sweep_z(const flow::Array2D& qw, double dt, const std::vector<char>& c
   flow::Array2D fw(g_.nr, g_.nz + 1, 0.0);
   parallel::parallel_for(0, g_.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
     for (int i = i_lo; i < i_hi; ++i) {
-      const double area = g_.metric(g_.rc(i)) * g_.dr;
+      const double area = g_.metric(g_.rc(i)) * g_.drc(i);
       for (int j = 0; j <= g_.nz; ++j) {
         const double q = qw(i, j);
         if (q == 0.0) continue;
@@ -101,7 +102,7 @@ void Vof::sweep_z(const flow::Array2D& qw, double dt, const std::vector<char>& c
           throw std::invalid_argument("VOF: nonzero flux through a domain boundary face");
         }
         const double dist = std::abs(q) / area * dt;
-        if (dist > 0.5 * g_.dz * (1.0 + 1e-12)) throw std::invalid_argument("VOF: CFL > 0.5 in z");
+        if (dist > 0.5 * g_.dzc(donor) * (1.0 + 1e-12)) throw std::invalid_argument("VOF: CFL > 0.5 in z");
         const double z0 = q > 0.0 ? g_.zf(j) - dist : g_.zf(j);
         const double z1 = q > 0.0 ? g_.zf(j) : g_.zf(j) + dist;
         // z 방향 띠의 체적은 폭에 정확히 비례 (면적 × 폭 = |q|Δt)
@@ -111,8 +112,8 @@ void Vof::sweep_z(const flow::Array2D& qw, double dt, const std::vector<char>& c
   });
   parallel::parallel_for(0, g_.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
     for (int i = i_lo; i < i_hi; ++i) {
-      const double vol = g_.cell_volume(i);
       for (int j = 0; j < g_.nz; ++j) {
+        const double vol = g_.cell_volume(i, j);
         const double div = (qw(i, j + 1) - qw(i, j)) * dt;
         const double cc = c[static_cast<std::size_t>(i) * g_.nz + j] ? 1.0 : 0.0;
         f_(i, j) = (f_(i, j) * vol - (fw(i, j + 1) - fw(i, j)) + cc * div) / vol;
@@ -139,8 +140,8 @@ void Vof::advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt, in
   // 물 체적을 정확히 보존한다 (발산 0 인 흐름에서는 반올림 수준의 차이).
   parallel::parallel_for(0, g_.nr, parallel::kRowGrain, [&](int i_lo, int i_hi) {
     for (int i = i_lo; i < i_hi; ++i) {
-      const double vol = g_.cell_volume(i);
       for (int j = 0; j < g_.nz; ++j) {
+        const double vol = g_.cell_volume(i, j);
         if (!c[static_cast<std::size_t>(i) * g_.nz + j]) continue;
         const double div = (qu(i + 1, j) - qu(i, j) + qw(i, j + 1) - qw(i, j)) * dt;
         f_(i, j) -= div / vol;
@@ -153,7 +154,7 @@ void Vof::advect(const flow::Array2D& qu, const flow::Array2D& qw, double dt, in
 double Vof::water_volume() const {
   double v = 0.0;
   for (int i = 0; i < g_.nr; ++i) {
-    for (int j = 0; j < g_.nz; ++j) v += f_(i, j) * g_.cell_volume(i);
+    for (int j = 0; j < g_.nz; ++j) v += f_(i, j) * g_.cell_volume(i, j);
   }
   return v;
 }

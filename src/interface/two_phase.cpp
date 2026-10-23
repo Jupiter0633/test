@@ -55,11 +55,11 @@ void TwoPhaseSolver::face_fluxes(const flow::Array2D& u, const flow::Array2D& w,
   qu = flow::Array2D(g.nr + 1, g.nz);
   qw = flow::Array2D(g.nr, g.nz + 1);
   for (int i = 1; i < g.nr; ++i) {
-    const double area = g.metric(g.rf(i)) * g.dz;
-    for (int j = 0; j < g.nz; ++j) qu(i, j) = u(i, j) * area;
+    const double mf = g.metric(g.rf(i));
+    for (int j = 0; j < g.nz; ++j) qu(i, j) = u(i, j) * (mf * g.dzc(j));
   }
   for (int i = 0; i < g.nr; ++i) {
-    const double area = g.metric(g.rc(i)) * g.dr;
+    const double area = g.metric(g.rc(i)) * g.drc(i);
     for (int j = 1; j < g.nz; ++j) qw(i, j) = w(i, j) * area;
   }
 }
@@ -72,11 +72,11 @@ void TwoPhaseSolver::face_fluxes_with_body(const flow::Array2D& u, const flow::A
   qu = flow::Array2D(g.nr + 1, g.nz);
   qw = flow::Array2D(g.nr, g.nz + 1);
   for (int i = 1; i < g.nr; ++i) {
-    const double area = g.metric(g.rf(i)) * g.dz;
-    for (int j = 0; j < g.nz; ++j) qu(i, j) = gm.open_u(i, j) * u(i, j) * area;  // 물체 r 속도 0
+    const double mf = g.metric(g.rf(i));
+    for (int j = 0; j < g.nz; ++j) qu(i, j) = gm.open_u(i, j) * u(i, j) * (mf * g.dzc(j));  // 물체 r 속도 0
   }
   for (int i = 0; i < g.nr; ++i) {
-    const double area = g.metric(g.rc(i)) * g.dr;
+    const double area = g.metric(g.rc(i)) * g.drc(i);
     for (int j = 1; j < g.nz; ++j) {
       const double open = gm.open_w(i, j);
       qw(i, j) = (open * w(i, j) + (1.0 - open) * wb) * area;
@@ -147,7 +147,7 @@ void TwoPhaseSolver::step_with_body(double dt) {
   for (int i = 0; i < g.nr; ++i) {
     for (int j = 0; j < g.nz; ++j) {
       const double v = vof_.f()(i, j), c = std::clamp(v, 0.0, phi1(i, j));
-      clipped_ += (v - c) * g.cell_volume(i);
+      clipped_ += (v - c) * g.cell_volume(i, j);
       vof_.f()(i, j) = c;
     }
   }

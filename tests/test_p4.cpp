@@ -35,7 +35,7 @@ void test_fluid_fraction_cylinder() {
     const flow::Array2D phi = body::fluid_fraction(g, c, zc);
     double solid = 0.0;
     for (int i = 0; i < g.nr; ++i) {
-      for (int j = 0; j < g.nz; ++j) solid += (1.0 - phi(i, j)) * g.cell_volume(i);
+      for (int j = 0; j < g.nz; ++j) solid += (1.0 - phi(i, j)) * g.cell_volume(i, j);
     }
     const double exact = geom == Geometry::Axisymmetric ? 0.5 * 0.3 * 0.3 * 0.25 : 0.3 * 0.25;
     expect(std::abs(solid - exact) < 1e-12 * exact,
@@ -62,7 +62,7 @@ void test_wedge_shape() {
   const flow::Array2D phi = body::fluid_fraction(g, w, 0.0013);
   double solid = 0.0;
   for (int i = 0; i < g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) solid += (1.0 - phi(i, j)) * g.cell_volume(i);
+    for (int j = 0; j < g.nz; ++j) solid += (1.0 - phi(i, j)) * g.cell_volume(i, j);
   }
   expect(std::abs(solid - 0.5 * a * h) < 1e-9 * a * h, "wedge solid area");
 }

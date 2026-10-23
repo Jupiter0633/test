@@ -70,10 +70,10 @@ std::array<double, 2> youngs_normal(const flow::Grid& g, const flow::Array2D& f,
   };
   const double gr = ((at(i + 1, j + 1) + 2.0 * at(i + 1, j) + at(i + 1, j - 1)) -
                      (at(i - 1, j + 1) + 2.0 * at(i - 1, j) + at(i - 1, j - 1))) /
-                    (8.0 * g.dr);
+                    (4.0 * (g.drn(i) + g.drn(i + 1)));  // 균일 격자: 8Δr
   const double gz = ((at(i + 1, j + 1) + 2.0 * at(i, j + 1) + at(i - 1, j + 1)) -
                      (at(i + 1, j - 1) + 2.0 * at(i, j - 1) + at(i - 1, j - 1))) /
-                    (8.0 * g.dz);
+                    (4.0 * (g.dzn(j) + g.dzn(j + 1)));
   const double len = std::hypot(gr, gz);
   if (!(len > 0.0)) return {0.0, 1.0};
   return {-gr / len, -gz / len};

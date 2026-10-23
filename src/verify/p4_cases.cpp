@@ -105,11 +105,9 @@ double max_speed(const flow::FlowSolver& s) {
   return m;
 }
 
-int face_index(double x, double x0, double d) {
-  const double q = (x - x0) / d;
-  const long k = std::lround(q);
-  if (std::abs(q - static_cast<double>(k)) > 1e-9) throw std::invalid_argument("control surface is not on a grid face");
-  return static_cast<int>(k);
+int face_index(int k) {
+  if (k < 0) throw std::invalid_argument("control surface is not on a grid face");
+  return k;
 }
 
 // 바깥 대기(영역 윗면) 와 이어지지 않은 공기 덩어리 중, 물체 아래(r < a, z < 바닥면) 에 닿는 것 = 갇힌 포켓.
@@ -177,7 +175,7 @@ Pocket find_pocket(const Grid& g, const Array2D& f, const Array2D& phi, const Ar
     for (int j = 0; j < nz; ++j) {
       const int lab = label[idx(i, j)];
       if (lab <= 0 || !is_pocket[static_cast<std::size_t>(lab)]) continue;
-      const double v = std::max(0.0, phi(i, j) - f(i, j)) * g.cell_volume(i);
+      const double v = std::max(0.0, phi(i, j) - f(i, j)) * g.cell_volume(i, j);
       pk.volume += v;
       if (active[idx(i, j)]) {
         sp += p(i, j) * v;
@@ -199,12 +197,12 @@ struct CvTerms {
 
 CvTerms cv_terms(const Grid& g, const flow::FlowSolver& fs, const Array2D& f, const Array2D& phi, double rs,
                  double zb, double zt) {
-  const int is = face_index(rs, g.r0, g.dr), jb = face_index(zb, g.z0, g.dz), jt = face_index(zt, g.z0, g.dz);
+  const int is = face_index(g.face_r(rs)), jb = face_index(g.face_z(zb)), jt = face_index(g.face_z(zt));
   const Array2D& u = fs.u();
   const Array2D& w = fs.w();
   const Array2D& p = fs.pressure();
   auto mass = [&](int i, int j) {
-    return (f(i, j) * kRhoW + std::max(0.0, phi(i, j) - f(i, j)) * kRhoA) * g.cell_volume(i);
+    return (f(i, j) * kRhoW + std::max(0.0, phi(i, j) - f(i, j)) * kRhoA) * g.cell_volume(i, j);
   };
   auto fe = [&](int i, int j) { return phi(i, j) > 1e-12 ? std::clamp(f(i, j) / phi(i, j), 0.0, 1.0) : 0.0; };
   auto rho = [&](int i, int j) { return fe(i, j) * kRhoW + (1.0 - fe(i, j)) * kRhoA; };
@@ -226,16 +224,16 @@ CvTerms cv_terms(const Grid& g, const flow::FlowSolver& fs, const Array2D& f, co
       const int j = sgn > 0 ? jt : jb;
       const double pf = 0.5 * (p(i, j - 1) + p(i, j));
       const double rf = 0.5 * (rho(i, j - 1) + rho(i, j)), mf = 0.5 * (mu(i, j - 1) + mu(i, j));
-      const double tzz = 2.0 * mf * (w(i, j + 1) - w(i, j - 1)) / (2.0 * g.dz);
-      s += sgn * (-pf + tzz - rf * w(i, j) * w(i, j)) * g.metric(g.rc(i)) * g.dr;
+      const double tzz = 2.0 * mf * (w(i, j + 1) - w(i, j - 1)) / (g.dzc(j - 1) + g.dzc(j));
+      s += sgn * (-pf + tzz - rf * w(i, j) * w(i, j)) * g.metric(g.rc(i)) * g.drc(i);
     }
   }
   for (int j = jb; j < jt; ++j) {
     const double rf = 0.5 * (rho(is - 1, j) + rho(is, j)), mf = 0.5 * (mu(is - 1, j) + mu(is, j));
-    const double dudz = (u(is, j + 1) - u(is, j - 1)) / (2.0 * g.dz);
-    const double dwdr = 0.5 * ((w(is, j) - w(is - 1, j)) + (w(is, j + 1) - w(is - 1, j + 1))) / g.dr;
+    const double dudz = (u(is, j + 1) - u(is, j - 1)) / (g.dzn(j) + g.dzn(j + 1));
+    const double dwdr = 0.5 * ((w(is, j) - w(is - 1, j)) + (w(is, j + 1) - w(is - 1, j + 1))) / g.drn(is);
     const double wc = 0.25 * (w(is - 1, j) + w(is, j) + w(is - 1, j + 1) + w(is, j + 1));
-    s += (mf * (dudz + dwdr) - rf * wc * u(is, j)) * g.metric(g.rf(is)) * g.dz;
+    s += (mf * (dudz + dwdr) - rf * wc * u(is, j)) * g.metric(g.rf(is)) * g.dzc(j);
   }
   const double scale = g.geometry == Geometry::Axisymmetric ? 2.0 * kPi : 1.0;
   c.momentum *= scale;
@@ -277,7 +275,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   // 처음 물: z < 0 (셀마다 정확한 비율), 고체 부분은 0
   Array2D f0(g.nr, g.nz);
   for (int i = 0; i < g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) f0(i, j) = std::clamp((0.0 - g.zf(j)) / g.dz, 0.0, 1.0);
+    for (int j = 0; j < g.nz; ++j) f0(i, j) = std::clamp((0.0 - g.zf(j)) / g.dzc(j), 0.0, 1.0);
   }
   const Array2D p_hyd = hydrostatic(pb, f0);  // 물체는 공기 중 (고체를 공기로 보고 정수압)
   const Array2D phi0 = body::fluid_fraction(g, *shape, zc0);
@@ -311,7 +309,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   s.flow().set_pressure(p0);
   const double water0 = s.vof().water_volume();
 
-  const double h = std::min(g.dr, g.dz);
+  const double h = std::min(g.dr_min(), g.dz_min());
   const double rho_c_v = kRhoW * kCw * kV;
   double peak_force = 0.0, peak_bottom = -1e300, peak_s1 = -1e300, peak_s2 = -1e300, peak_point = -1e300;
   double pocket_max_volume = 0.0, side_peak = -1e300;
@@ -373,7 +371,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
       std::snprintf(name, sizeof(name), "snap_%03d.csv", snapshot_count++);
       std::ofstream o(std::filesystem::path(es.snapshot_dir) / name);
       o << "# t=" << t << " zc=" << zc << " half_height=" << hh << " a=" << kA << " planar=" << (planar ? 1 : 0)
-        << " nr=" << g.nr << " nz=" << g.nz << " dr=" << g.dr << " dz=" << g.dz << " z0=" << g.z0 << "\n";
+        << " nr=" << g.nr << " nz=" << g.nz << " dr=" << g.dr_min() << " dz=" << g.dz_min() << " z0=" << g.z0 << "\n";
       o << "r,z,phi,water,p_gauge,u,w,active\n";
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) {
@@ -403,7 +401,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
       // 옆벽: 법선이 수평인 조각 (n_z 면적 0) 의 압력 평균 — 3-I 보고
       // 옆벽 r ≈ a 의 조각 (법선이 수평, n_z 면적 0) 의 압력 평균 — 3-I 보고
       const double side = body::average_surface_pressure_by_length(g, geom, p, [&](const body::BoundaryPiece& pc) {
-        return pc.nz_area == 0.0 && std::abs(pc.r - kA) < 0.5 * g.dr;
+        return pc.nz_area == 0.0 && std::abs(pc.r - kA) < 0.5 * g.drc(pc.i);
       }) - ref;
       side_peak = std::max(side_peak, side);
     }
@@ -424,7 +422,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
         if (g.zc(j) >= zb) continue;
         const double ph = phi(0, j);
         if (ph > 0.5 && s.vof().f()(0, j) / ph > 0.5) {
-          gap = zb - (g.zf(j) + s.vof().f()(0, j) / ph * g.dz);
+          gap = zb - (g.zf(j) + s.vof().f()(0, j) / ph * g.dzc(j));
           break;
         }
       }
@@ -886,7 +884,7 @@ TestReport run_3g(bool quick) {
       const double zc = -2.0 * kA;  // 윗면 −a
       Array2D f(g.nr, g.nz);
       for (int i = 0; i < g.nr; ++i) {
-        for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((0.0 - g.zf(j)) / g.dz, 0.0, 1.0);
+        for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((0.0 - g.zf(j)) / g.dzc(j), 0.0, 1.0);
       }
       const Array2D p_hyd = hydrostatic(pb, f);  // 고체를 물로 보고 정수압
       const Array2D phi = body::fluid_fraction(g, *shape, zc);
@@ -909,7 +907,7 @@ TestReport run_3g(bool quick) {
       Array2D p0 = p_hyd;
       for (double& v : p0.data()) v += kPatm;
       s.flow().set_pressure(p0);
-      const double dt = 0.1 * g.dz / std::sqrt(kG * kA);
+      const double dt = 0.1 * g.dz_min() / std::sqrt(kG * kA);
       double vmax = 0.0;
       for (int k = 0; k < steps; ++k) {
         s.step(dt);

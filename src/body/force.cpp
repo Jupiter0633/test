@@ -98,8 +98,6 @@ bool solve_small(int n, double* m, double* rhs) {
 
 double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const Shape& shape,
                            double zc, const flow::Array2D& w, double mu, double body_w) {
-  const double h = std::max(g.dr, g.dz);
-  const double reach = 3.0 * h;
   double f = 0.0;
   for (const auto& piece : geom.pieces) {
     if (piece.length <= 0.0) continue;
@@ -110,8 +108,10 @@ double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const S
     constexpr int kN = 5;
     double m[kN * kN] = {0}, rhs[kN] = {0};
     int count = 0;
-    const int i0 = static_cast<int>(std::floor((piece.r - g.r0) / g.dr));
-    const int j0 = static_cast<int>(std::floor((piece.z - g.z0) / g.dz));
+    const int i0 = g.cell_r(piece.r);
+    const int j0 = g.cell_z(piece.z);
+    const double h = std::max(g.drc(std::clamp(i0, 0, g.nr - 1)), g.dzc(std::clamp(j0, 0, g.nz - 1)));
+    const double reach = 3.0 * h;
     for (int i = std::max(0, i0 - 4); i <= std::min(g.nr - 1, i0 + 4); ++i) {
       for (int j = std::max(0, j0 - 4); j <= std::min(g.nz, j0 + 4); ++j) {
         const double r = g.rc(i), z = g.zf(j);
@@ -178,17 +178,13 @@ double max_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const 
 double axial_force_control_surface(const flow::Grid& g, const flow::Array2D& u,
                                    const flow::Array2D& w, const flow::Array2D& p, double mu,
                                    double rho, double rs, double z_bottom, double z_top) {
-  auto face = [](double x, double x0, double d, const char* what) {
-    const double q = (x - x0) / d;
-    const long k = std::lround(q);
-    if (std::abs(q - static_cast<double>(k)) > 1e-9) {
-      throw std::invalid_argument(std::string("control surface is not on a grid face: ") + what);
-    }
-    return static_cast<int>(k);
+  auto face = [](int k, const char* what) {
+    if (k < 0) throw std::invalid_argument(std::string("control surface is not on a grid face: ") + what);
+    return k;
   };
-  const int is = face(rs, g.r0, g.dr, "r");
-  const int jb = face(z_bottom, g.z0, g.dz, "z bottom");
-  const int jt = face(z_top, g.z0, g.dz, "z top");
+  const int is = face(g.face_r(rs), "r");
+  const int jb = face(g.face_z(z_bottom), "z bottom");
+  const int jt = face(g.face_z(z_top), "z top");
   if (is < 1 || is > g.nr - 1 || jb < 1 || jt > g.nz - 1 || jb >= jt) {
     throw std::invalid_argument("control surface must lie strictly inside the grid");
   }
@@ -198,17 +194,17 @@ double axial_force_control_surface(const flow::Grid& g, const flow::Array2D& u,
     for (int sgn : {+1, -1}) {
       const int j = sgn > 0 ? jt : jb;
       const double pf = 0.5 * (p(i, j - 1) + p(i, j));
-      const double tzz = 2.0 * mu * (w(i, j + 1) - w(i, j - 1)) / (2.0 * g.dz);
-      f += sgn * (-pf + tzz - rho * w(i, j) * w(i, j)) * g.metric(g.rc(i)) * g.dr;
+      const double tzz = 2.0 * mu * (w(i, j + 1) - w(i, j - 1)) / (g.dzc(j - 1) + g.dzc(j));
+      f += sgn * (-pf + tzz - rho * w(i, j) * w(i, j)) * g.metric(g.rc(i)) * g.drc(i);
     }
   }
   // 옆면 (n_r = +1): τ_rz − ρ u_z u_r, r 면 위치, 셀 중심 높이
   for (int j = jb; j < jt; ++j) {
-    const double dudz = (u(is, j + 1) - u(is, j - 1)) / (2.0 * g.dz);
+    const double dudz = (u(is, j + 1) - u(is, j - 1)) / (g.dzn(j) + g.dzn(j + 1));
     const double dwdr =
-        0.5 * ((w(is, j) - w(is - 1, j)) + (w(is, j + 1) - w(is - 1, j + 1))) / g.dr;
+        0.5 * ((w(is, j) - w(is - 1, j)) + (w(is, j + 1) - w(is - 1, j + 1))) / g.drn(is);
     const double wc = 0.25 * (w(is - 1, j) + w(is, j) + w(is - 1, j + 1) + w(is, j + 1));
-    f += (mu * (dudz + dwdr) - rho * wc * u(is, j)) * g.metric(g.rf(is)) * g.dz;
+    f += (mu * (dudz + dwdr) - rho * wc * u(is, j)) * g.metric(g.rf(is)) * g.dzc(j);
   }
   return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
 }

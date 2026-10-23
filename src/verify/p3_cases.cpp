@@ -134,7 +134,7 @@ TestReport run_2b(bool quick) {
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) {
           vof.f()(i, j) = sphere_cell_volume(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1), zc, radius) /
-                          g.cell_volume(i);
+                          g.cell_volume(i, j);
         }
       }
       const Array2D f0 = vof.f();
@@ -150,12 +150,12 @@ TestReport run_2b(bool quick) {
       }
       double umax = 0.0;
       for (int i = 1; i < g.nr; ++i) {
-        for (int j = 0; j < g.nz; ++j) umax = std::max(umax, std::abs(qu0(i, j)) / (g.rf(i) * g.dz));
+        for (int j = 0; j < g.nz; ++j) umax = std::max(umax, std::abs(qu0(i, j)) / (g.rf(i) * g.dzc(j)));
       }
       for (int i = 0; i < g.nr; ++i) {
-        for (int j = 1; j < g.nz; ++j) umax = std::max(umax, std::abs(qw0(i, j)) / (g.rc(i) * g.dr));
+        for (int j = 1; j < g.nz; ++j) umax = std::max(umax, std::abs(qw0(i, j)) / (g.rc(i) * g.drc(i)));
       }
-      const int steps = static_cast<int>(std::ceil(T / (0.25 * g.dr / umax)));
+      const int steps = static_cast<int>(std::ceil(T / (0.25 * g.dr_min() / umax)));
       const double dt = T / steps;
 
       double vol_change = 0.0, bounds = 0.0;
@@ -170,7 +170,7 @@ TestReport run_2b(bool quick) {
       }
       double err = 0.0;
       for (int i = 0; i < g.nr; ++i) {
-        for (int j = 0; j < g.nz; ++j) err += std::abs(vof.f()(i, j) - f0(i, j)) * g.cell_volume(i);
+        for (int j = 0; j < g.nz; ++j) err += std::abs(vof.f()(i, j) - f0(i, j)) * g.cell_volume(i, j);
       }
       run.metrics["shape_error"] = err / v0;
       run.metrics["volume_relative_change"] = vol_change;
@@ -258,7 +258,7 @@ TestReport run_2c(bool quick, bool limiter) {
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) {
           f0(i, j) = water_below_surface(g.rf(i), g.rf(i + 1), g.zf(j), g.zf(j + 1), surface, true) /
-                     g.cell_volume(i);
+                     g.cell_volume(i, j);
         }
       }
       auto mat = std::make_shared<interface::VofMaterial>(rho_w, 0.0, rho_a, 0.0);
@@ -266,10 +266,10 @@ TestReport run_2c(bool quick, bool limiter) {
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       const double v0 = s.vof().water_volume();
       // Δt = 0.25 Δ / √(g h)  (§1.3 이 정하지 않아 여기서 정함)
-      const double dt = 0.25 * g.dz / std::sqrt(g0 * h);
+      const double dt = 0.25 * g.dz_min() / std::sqrt(g0 * h);
       auto eta = [&]() {  // 축 옆 첫 열의 물 높이 − h
         double col = 0.0;
-        for (int j = 0; j < g.nz; ++j) col += s.vof().f()(0, j) * g.dz;
+        for (int j = 0; j < g.nz; ++j) col += s.vof().f()(0, j) * g.dzc(j);
         return col - h;
       };
       std::vector<double> crossings;
@@ -332,7 +332,7 @@ constexpr double kRhoW = 1000.0, kRhoA = 1.2, kMuW = 1e-3, kMuA = 1.8e-5, kG = 9
 Array2D flat_fraction(const Grid& g, double zs) {
   Array2D f(g.nr, g.nz);
   for (int i = 0; i < g.nr; ++i) {
-    for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((zs - g.zf(j)) / g.dz, 0.0, 1.0);
+    for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((zs - g.zf(j)) / g.dzc(j), 0.0, 1.0);
   }
   return f;
 }
@@ -381,7 +381,7 @@ TestReport run_2a(bool quick, bool limiter) {
           pb.grid = Grid(geom, n, n, 0.0, 1.0, 0.0, 1.0);
           pb.bc.r_min.kind = geom == Geometry::Axisymmetric ? flow::BoundaryKind::Axis : flow::BoundaryKind::Wall;
           pb.gravity = {0.0, -kG};
-          const Array2D f0 = flat_fraction(pb.grid, 0.5 + 0.3 * pb.grid.dz);
+          const Array2D f0 = flat_fraction(pb.grid, 0.5 + 0.3 * pb.grid.dzc(pb.grid.cell_z(0.5)));
           Array2D p0;
           if (compressible) {
             p0 = hydrostatic_pressure(pb, f0);
@@ -453,7 +453,7 @@ TestReport run_2f(bool quick, bool limiter) {
         Array2D f0(g.nr, g.nz);
         for (int i = 0; i < g.nr; ++i) {
           for (int j = 0; j < g.nz; ++j) {
-            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dz, 0.0, 1.0);
+            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dzc(j), 0.0, 1.0);
           }
         }
         auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
@@ -472,8 +472,8 @@ TestReport run_2f(bool quick, bool limiter) {
           double sp = 0.0, sv = 0.0;
           for (int i = 0; i < g.nr; ++i) {
             for (int j = 0; j < g.nz && g.zf(j + 1) <= la + 1e-12; ++j) {
-              sp += s.flow().pressure()(i, j) * g.cell_volume(i);
-              sv += g.cell_volume(i);
+              sp += s.flow().pressure()(i, j) * g.cell_volume(i, j);
+              sv += g.cell_volume(i, j);
             }
           }
           return sp / sv - p0;
@@ -571,7 +571,7 @@ TestReport run_2t(bool quick) {
         Array2D f0(g.nr, g.nz);
         for (int i = 0; i < g.nr; ++i) {
           for (int j = 0; j < g.nz; ++j) {
-            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dz, 0.0, 1.0);
+            f0(i, j) = std::clamp((std::min(la + lw, g.zf(j + 1)) - std::max(la, g.zf(j))) / g.dzc(j), 0.0, 1.0);
           }
         }
         auto mat = std::make_shared<interface::VofMaterial>(kRhoW, 0.0, kRhoA, 0.0);
@@ -591,8 +591,8 @@ TestReport run_2t(bool quick) {
           double sp = 0.0, sv = 0.0;
           for (int i = 0; i < g.nr; ++i) {
             for (int j = 0; j < g.nz && g.zf(j + 1) <= la + 1e-12; ++j) {
-              sp += s.flow().pressure()(i, j) * g.cell_volume(i);
-              sv += g.cell_volume(i);
+              sp += s.flow().pressure()(i, j) * g.cell_volume(i, j);
+              sv += g.cell_volume(i, j);
             }
           }
           return sp / sv - p0;
@@ -679,19 +679,19 @@ TestReport run_2d(bool quick) {
       const double v0 = s.vof().water_volume();
       // 적응 시간 간격: 고정 간격은 퍼지는 앞머리 속도를 따라가지 못해 VOF CFL 한계(0.5)를 넘었다
       // (2026-10-22 워크스테이션 1차 실행). 한 단계에 최대 1/4 칸만 움직이도록 줄인다.
-      const double dt_max = 0.1 * g.dr / std::sqrt(kG * a);
+      const double dt_max = 0.1 * g.dr_min() / std::sqrt(kG * a);
       std::string hist;
       double next = 0.0, vol = 0.0, dt_min = dt_max, vmax_run = 0.0;
       while (s.time() < t_star_end * t_scale) {
         const double vmax = max_speed(s.flow());
-        const double dt = vmax > 0.0 ? std::min(dt_max, 0.25 * std::min(g.dr, g.dz) / vmax) : dt_max;
+        const double dt = vmax > 0.0 ? std::min(dt_max, 0.25 * std::min(g.dr_min(), g.dz_min()) / vmax) : dt_max;
         dt_min = std::min(dt_min, dt);
         s.step(dt);
         vol = std::max(vol, std::abs(s.vof().water_volume() - v0) / v0);
         vmax_run = std::max(vmax_run, max_speed(s.flow()));
         if (s.time() >= next * t_scale) {
           double front = 0.0;  // 바닥 행에서 물이 닿은 반경 (물 비율 합 × Δr)
-          for (int i = 0; i < g.nr; ++i) front += s.vof().f()(i, 0) * g.dr;
+          for (int i = 0; i < g.nr; ++i) front += s.vof().f()(i, 0) * g.drc(i);
           hist += (hist.empty() ? "" : ", ") + fmt(s.time() / t_scale) + ":" + fmt(front / a);
           next += 0.5;
         }

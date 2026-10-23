@@ -49,7 +49,7 @@ flow::Array2D fluid_fraction(const flow::Grid& g, const Shape& shape, double zc)
           if (b > r0) solid += 0.5 * (zb - za) * w[q] * area(r0, b);
         }
       }
-      const double v = solid / (area(r0, r1) * g.dz);
+      const double v = solid / (area(r0, r1) * g.dzc(j));
       phi(i, j) = v < 1e-12 ? 1.0 : (v > 1.0 - 1e-12 ? 0.0 : 1.0 - v);
     }
   }
@@ -112,7 +112,7 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double zc) {
       c.active[static_cast<std::size_t>(i) * g.nz + j] = any_open ? 1 : 0;
       if (!any_open) continue;
 
-      const double full = g.metric(g.rc(i)) * g.dr;
+      const double full = g.metric(g.rc(i)) * g.drc(i);
       const double nz_area = full * (c.open_w(i, j) - c.open_w(i, j + 1));
 
       // 셀 경계와 물체 경계가 만나는 점들
@@ -197,7 +197,7 @@ MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double
             const double d = std::max(0.0, r - radius);
             if (best < 0.0 || d < best) {
               best = d;
-              h = g.dr;
+              h = comp == 0 ? g.drc(i) : g.drn(i + 1);  // 바깥 면 o1 까지 거리 (늘어나는 격자에서도 정확)
               oi = i + 1;
               oj = j;
             }
@@ -212,7 +212,7 @@ MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double
           const double d = std::max(0.0, s < 0 ? z - (hi + zc) : (lo + zc) - z);
           if (best < 0.0 || d < best) {
             best = d;
-            h = g.dz;
+            h = comp == 0 ? (s < 0 ? g.dzn(j + 1) : g.dzn(j)) : (s < 0 ? g.dzc(j) : g.dzc(j - 1));
             oi = i;
             oj = j - s;
           }
