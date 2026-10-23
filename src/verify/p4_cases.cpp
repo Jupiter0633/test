@@ -332,7 +332,11 @@ EntryOut run_entry_impl(const EntrySetup& es) {
       return;
     }
     const double ref = gauge_ref();
-    const double force = body::axial_pressure_force(g, geom, p) +
+    // 힘은 대기압 기준 (게이지) 압력으로 적분한다. 영역 밖으로 나간 물체 부분 (3-I 원통 윗면) 에는
+    // 대기압이 걸린다고 보는 것과 같다. 물체 전체가 영역 안이면 결과는 같다 (닫힌 표면의 상수 압력 합력 0).
+    Array2D p_gauge = p;
+    for (double& v : p_gauge.data()) v -= ref;
+    const double force = body::axial_pressure_force(g, geom, p_gauge) +
                          body::axial_viscous_force(g, geom, *shape, zc, s.flow().w(), kMuW, -kV);
     auto bottom = [&](double rmax) {
       return [=](const body::BoundaryPiece& pc) { return pc.nz_area > 0.0 && pc.z < zc && pc.r <= rmax; };
