@@ -603,7 +603,10 @@ TestReport run_4e_c(bool quick) {
   rep.notes.push_back("report only: solid model vs Kirchhoff plate theory (thickness and clamp modelling differ)");
   rep.verdict = quick ? "QUICK_CHECK_ONLY" : "REPORT_ONLY";
   for (const auto& r : rep.runs) {
-    if (!r.failure.empty()) rep.verdict += " (" + r.failure.substr(0, r.failure.find(' ')) + ")";
+    if (!r.failure.empty()) {
+      rep.verdict += " (" + r.failure.substr(0, r.failure.find(' ')) + ")";
+      break;
+    }
   }
   return rep;
 }
