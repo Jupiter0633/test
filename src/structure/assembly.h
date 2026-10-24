@@ -66,15 +66,25 @@ class Model {
   bool finalized_ = false;
 };
 
+// 선형 풀이 확인값 (03 §1.5 공통 정의, 2026-10-24 변경):
+//   역방향 오차 ‖A x − b‖_∞ / (‖A‖_∞ ‖x‖_∞ + ‖b‖_∞) — 판정 (≤ 1e−12)
+//   상대 잔차 ‖A x − b‖_2 / ‖b‖_2 — 보고만
+struct SolveCheck {
+  double backward_error = 0.0;
+  double rel_residual = 0.0;
+  void merge(const SolveCheck& o) {
+    if (o.backward_error > backward_error) backward_error = o.backward_error;
+    if (o.rel_residual > rel_residual) rel_residual = o.rel_residual;
+  }
+};
+
 // 정적 문제: 자유 자유도에서 K u = F, 지정 자유도 값은 u_prescribed (전역 벡터의 지정 자리).
-// 상대 잔차 ||K u − F||_free / ||F − K u_p||_free 를 rel_residual 에 쓴다.
-// 1e−10 을 넘으면 호출한 쪽이 FAILED_SOLVER 로 처리한다.
-Vec solve_static(const Model& model, const Vec& F, const Vec& u_prescribed, double* rel_residual);
+Vec solve_static(const Model& model, const Vec& F, const Vec& u_prescribed, SolveCheck* check);
 
 // 분해된 행렬과 그 행렬의 cK, cM 으로 자유 자유도 해를 구하고 잔차를 확인한다.
 // rhs, 해 모두 자유 자유도 벡터.
 Vec solve_checked(const Model& model, const SkylineMatrix& factored, double cK, double cM, const Vec& rhs,
-                  double* rel_residual);
+                  SolveCheck* check);
 
 // 반력 R = K u − F (전역 벡터, 자유 자리 값은 평형 잔차)
 Vec reactions(const Model& model, const Vec& u, const Vec& F);

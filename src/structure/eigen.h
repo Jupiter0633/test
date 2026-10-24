@@ -16,7 +16,7 @@ struct EigenResult {
   std::vector<Vec> modes;      // 전역 벡터, φᵀMφ = 1
   int iterations = 0;
   bool converged = false;
-  double max_rel_residual = 0.0;  // 선형 풀이 잔차의 최댓값
+  SolveCheck check;  // 선형 풀이 확인값의 최댓값
 };
 
 // shift σ 는 K − σM 이 양의 정부호가 되도록 (지지가 없으면 음수) 준다.

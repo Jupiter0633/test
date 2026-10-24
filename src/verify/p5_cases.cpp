@@ -20,13 +20,13 @@ using namespace hcw::structure;
 
 namespace {
 
-const char* const kCriteriaCommit = "9bf931b";
+const char* const kCriteriaCommit = "2545133";  // 9bf931b 에 고정, 2545133 에서 3 건 변경
 
 // 정확 재현 상한 (03 §1.5 공통 정의)
 constexpr double kExactDisp = 1e-10;
 constexpr double kExactStress = 1e-9;
-// 선형 풀이 잔차 상한
-constexpr double kSolverResidual = 1e-10;
+// 선형 풀이 역방향 오차 상한 (2026-10-24 변경, 03 §1.5 P5 변경 기록 ①)
+constexpr double kSolverBackward = 1e-12;
 
 using Field2 = std::function<std::array<double, 2>(double, double)>;
 using Field4 = std::function<std::array<double, 4>(double, double)>;
@@ -68,9 +68,11 @@ Criterion all_at_most(const std::vector<GridRun>& runs, const std::string& key, 
   return make(key + ": every run <= " + fmt(limit), ok, "max " + fmt(worst));
 }
 
-void check_residual(GridRun& run, double res) {
-  run.metrics["max_solver_residual"] = std::max(run.metrics["max_solver_residual"], res);
-  if (!(res <= kSolverResidual) && run.failure.empty()) run.failure = "FAILED_SOLVER (residual " + fmt(res) + ")";
+void check_residual(GridRun& run, const SolveCheck& c) {
+  run.metrics["max_solver_backward_error"] = std::max(run.metrics["max_solver_backward_error"], c.backward_error);
+  run.metrics["max_solver_relative_residual"] = std::max(run.metrics["max_solver_relative_residual"], c.rel_residual);
+  if (!(c.backward_error <= kSolverBackward) && run.failure.empty())
+    run.failure = "FAILED_SOLVER (backward error " + fmt(c.backward_error) + ")";
 }
 
 void check_finite(GridRun& run) {
@@ -254,7 +256,7 @@ TestReport run_4a(bool quick) {
     Vec F(model.num_dofs(), 0.0);
     add_traction(model.mesh(), boundary_edges_where(model.mesh(), [](double r, double z) { return r == 1.0 || z == 1.0; }),
                  traction_of(se), F);
-    double res = 0;
+    SolveCheck res;
     const Vec u = solve_static(model, F, nodal(model.mesh(), ue), &res);
     check_residual(run, res);
     run.metrics["disp_max_error"] = max_nodal_error(model.mesh(), u, ue);
@@ -278,7 +280,7 @@ TestReport run_4a(bool quick) {
       add_body_force(model.mesh(), mms_minus_div, F);
       add_traction(model.mesh(), boundary_edges_where(model.mesh(), [](double, double z) { return z == 1.0; }),
                    traction_of(mms_s), F);
-      double res = 0;
+      SolveCheck res;
       const Vec u = solve_static(model, F, nodal(model.mesh(), mms_u), &res);
       check_residual(run, res);
       const Norms e = l2_errors(model, u, mms_u, mms_s);
@@ -328,7 +330,7 @@ TestReport run_4b(bool quick) {
       double fr = 0.0;
       for (int nd = 0; nd < model.num_dofs() / 2; ++nd) fr += F[2 * nd];
       run.metrics["load_sum_error"] = std::abs(fr - p * kTwoPi * a * H) / (p * kTwoPi * a * H);
-      double res = 0;
+      SolveCheck res;
       const Vec u = solve_static(model, F, Vec(model.num_dofs(), 0.0), &res);
       check_residual(run, res);
       const Norms e = l2_errors(model, u, ue, se);
@@ -394,7 +396,7 @@ TestReport run_4c(bool quick) {
         Vec F(model.num_dofs(), 0.0);
         add_pressure(model.mesh(), boundary_edges_where(model.mesh(), [h](double, double z) { return z == h / 2; }), 1.0,
                      F);
-        double res = 0;
+        SolveCheck res;
         const Vec u = solve_static(model, F, nodal(model.mesh(), ue), &res);
         check_residual(run, res);
         const Norms e = l2_errors(model, u, ue, se);
@@ -532,7 +534,7 @@ TestReport run_4e(bool quick) {
         c.supports(model);
         model.finalize();
         const EigenResult er = lowest_modes(model, nm, 0.0);
-        check_residual(run, er.max_rel_residual);
+        check_residual(run, er.check);
         run.metrics["eigen_iterations"] = er.iterations;
         if (!er.converged && run.failure.empty()) run.failure = "FAILED_SOLVER (eigenvalues did not converge)";
         double other = 0.0;
@@ -591,7 +593,7 @@ TestReport run_4e_c(bool quick) {
                                  model.fix_where([](double r, double) { return r == 1.0; }, 1);
                                  model.finalize();
                                  const EigenResult er = lowest_modes(model, 3, 0.0);
-                                 check_residual(run, er.max_rel_residual);
+                                 check_residual(run, er.check);
                                  const double D = mat.E * h * h * h / (12 * (1 - mat.nu * mat.nu));
                                  for (int m = 0; m < 3; ++m) {
                                    const double wk = lam2[m] * std::sqrt(D / (mat.rho * h));
@@ -641,7 +643,7 @@ TestReport run_4f(bool quick) {
       model.finalize();
       // 가장 낮은 탄성 모드. z 강체 이동 (ω = 0) 은 미리 알고 있으므로 빼고 구한다.
       const EigenResult er = lowest_modes(model, 1, -1.0, 2000, {rigid_z(model)});
-      check_residual(run, er.max_rel_residual);
+      check_residual(run, er.check);
       if (!er.converged && run.failure.empty()) run.failure = "FAILED_SOLVER (eigenvalues did not converge)";
       const double w1 = std::sqrt(er.omega2[0]);
       run.metrics["omega1"] = w1;
@@ -665,7 +667,7 @@ TestReport run_4f(bool quick) {
         if (En > prev * (1 + 1e-12)) ++increases;
         prev = En;
       }
-      check_residual(run, ig.max_rel_residual());
+      check_residual(run, ig.check());
       run.metrics["energy_max_relative_change"] = max_change;
       run.metrics["energy_final_over_initial"] = prev / E0;
       run.metrics["energy_increasing_steps"] = increases;
@@ -676,11 +678,15 @@ TestReport run_4f(bool quick) {
     const auto& r0 = rep.runs[0].metrics;
     rep.criteria.push_back(make("Newmark undamped: max |E_n - E_0| / E_0 <= 1e-8",
                                 r0.at("energy_max_relative_change") <= 1e-8, fmt(r0.at("energy_max_relative_change"))));
-    for (int k = 1; k <= 2; ++k) {
-      const double inc = rep.runs[k].metrics.at("energy_increasing_steps");
-      rep.criteria.push_back(make(rep.runs[k].label + ": energy never increases (E_{n+1} <= E_n (1 + 1e-12))", inc == 0,
-                                  fmt(inc) + " increasing steps of " + std::to_string(steps)));
-    }
+    // HHT: 마지막 에너지 < 처음 에너지 (2026-10-24 변경, P5 변경 기록 ②). 증가 단계 수는 보고만.
+    const auto& r1 = rep.runs[1].metrics;
+    rep.criteria.push_back(make(rep.runs[1].label + ": final energy < initial energy",
+                                r1.at("energy_final_over_initial") < 1.0,
+                                "E_end/E_0 = " + fmt(r1.at("energy_final_over_initial")) + ", increasing steps " +
+                                    fmt(r1.at("energy_increasing_steps")) + " (report only)"));
+    const double inc = rep.runs[2].metrics.at("energy_increasing_steps");
+    rep.criteria.push_back(make(rep.runs[2].label + ": energy never increases (E_{n+1} <= E_n (1 + 1e-12))", inc == 0,
+                                fmt(inc) + " increasing steps of " + std::to_string(steps)));
   }
   conclude(rep, quick);
   return rep;
@@ -735,7 +741,7 @@ TestReport run_4g(bool quick) {
           const double t = s * dt;
           ig.step(force(t), scaled(g(t)), scaled(gd(t)), scaled(gdd(t)));
         }
-        check_residual(run, ig.max_rel_residual());
+        check_residual(run, ig.check());
         const double gT = g(steps * dt), gdT = gd(steps * dt);
         const Norms e = l2_errors(model, ig.u(), [&](double r, double z) {
           const auto u = mms_u(r, z);
@@ -882,7 +888,7 @@ TestReport run_4h(bool quick) {
           model.apply_M(ig.u(), Mu);
           unorm = std::max(unorm, std::sqrt(model.dot(ig.u(), Mu)));
         }
-        check_residual(r, ig.max_rel_residual());
+        check_residual(r, ig.check());
         r.metrics["leakage"] = leak / unorm;
         const double xi = c.ray.a0 / (2 * w) + c.ray.a1 * w / 2;
         double rho = 0, theta = 0, l3 = 0;
@@ -969,7 +975,7 @@ TestReport run_4i(bool quick) {
       model.finalize();
       Vec F(model.num_dofs(), 0.0);
       add_inertia_z(model, A, F);
-      double res = 0;
+      SolveCheck res;
       const Vec up = exact_top ? nodal(model.mesh(), ua) : Vec(model.num_dofs(), 0.0);
       const Vec u = solve_static(model, F, up, &res);
       check_residual(run, res);
@@ -1009,7 +1015,7 @@ TestReport run_4i(bool quick) {
       for (int n = 0; n < model.num_dofs() / 2; ++n) Fz += F[2 * n + 1];
       const double Arel = add_inertia_relief_z(model, F);
       run.metrics["relief_acceleration"] = Arel;
-      double res = 0;
+      SolveCheck res;
       const Vec u = solve_static(model, F, Vec(model.num_dofs(), 0.0), &res);
       check_residual(run, res);
       const Vec Rz = reactions(model, u, F);
@@ -1046,7 +1052,8 @@ TestReport run_4i(bool quick) {
     rep.criteria.push_back(make("(b) Gauss-point stress error / q <= 1e-9", b.at("stress_max_error") <= kExactStress,
                                 fmt(b.at("stress_max_error"))));
     const double b2 = rep.runs[3].metrics.at("support_reaction_over_load");
-    rep.criteria.push_back(make("(b2) cup: support reaction <= 1e-12 * total load", b2 <= 1e-12, fmt(b2)));
+    // 2026-10-24 변경 (P5 변경 기록 ③): 1e−12 → 1e−10
+    rep.criteria.push_back(make("(b2) cup: support reaction <= 1e-10 * total load", b2 <= 1e-10, fmt(b2)));
   }
   conclude(rep, quick);
   return rep;

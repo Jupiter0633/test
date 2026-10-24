@@ -34,8 +34,8 @@ class HhtIntegrator {
   double dt() const { return dt_; }
   // 이산 에너지 ½ vᵀMv + ½ uᵀKu
   double energy() const;
-  // 지금까지 선형 풀이 상대 잔차의 최댓값
-  double max_rel_residual() const { return max_res_; }
+  // 지금까지 선형 풀이 확인값의 최댓값
+  const SolveCheck& check() const { return check_; }
 
  private:
   // y = C x
@@ -49,7 +49,7 @@ class HhtIntegrator {
   SkylineMatrix Mff_;
   Vec u_, v_, a_, F_;
   double t_ = 0.0;
-  double max_res_ = 0.0;
+  SolveCheck check_;
 };
 
 }  // namespace hcw::structure

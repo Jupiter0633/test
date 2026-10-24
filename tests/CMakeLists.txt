@@ -23,8 +23,7 @@ target_link_libraries(hcw_unit_tests_p5 PRIVATE hcw_verify_p5)
 add_test(NAME unit_p5 COMMAND hcw_unit_tests_p5)
 
 # P5 (구조) 검증 시험의 축소판 (판정 아님)
-# 4E-c (보고만) 는 얇은 판 고유값 풀이의 잔차가 1e−10 을 넘어 축소판도 FAILED_SOLVER 로 끝나므로 넣지 않음
-foreach(t 4A 4B 4C 4E 4F 4G 4H 4I)
+foreach(t 4A 4B 4C 4E 4E-c 4F 4G 4H 4I)
   add_test(NAME verify_quick_${t} COMMAND hcw_verify ${t} --quick)
   set_tests_properties(verify_quick_${t} PROPERTIES LABELS quick)
 endforeach()

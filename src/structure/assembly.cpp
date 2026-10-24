@@ -207,14 +207,19 @@ double norm2(const Vec& v) {
 }  // namespace
 
 Vec solve_checked(const Model& model, const SkylineMatrix& factored, double cK, double cM, const Vec& rhs,
-                  double* rel_residual) {
+                  SolveCheck* check) {
   Vec x = rhs;
   factored.solve(x);
   // 잔차는 저장된 요소 행렬로 따로 계산한다 (분해와 독립).
   // 얇은 판처럼 조건수가 큰 행렬은 잔차 보정(x += A⁻¹ r)을 최대 3 번 한다.
   Vec full(model.num_dofs(), 0.0), y;
   const double nb = norm2(rhs);
-  double res = 0.0;
+  double res = 0.0, back = 0.0;
+  auto inf = [](const Vec& v) {
+    double m = 0.0;
+    for (double a : v) m = std::max(m, std::abs(a));
+    return m;
+  };
   for (int pass = 0;; ++pass) {
     model.scatter_free(x, full);
     model.apply(cK, cM, full, y);
@@ -222,15 +227,20 @@ Vec solve_checked(const Model& model, const SkylineMatrix& factored, double cK, 
     Vec r(rhs.size());
     for (std::size_t i = 0; i < r.size(); ++i) r[i] = rhs[i] - yf[i];
     res = nb > 0.0 ? norm2(r) / nb : norm2(r);
+    const double den = factored.norm_inf() * inf(x) + inf(rhs);
+    back = den > 0.0 ? inf(r) / den : inf(r);
     if (res <= 1e-14 || pass == 3) break;
     factored.solve(r);
     for (std::size_t i = 0; i < x.size(); ++i) x[i] += r[i];
   }
-  if (rel_residual) *rel_residual = res;
+  if (check) {
+    check->rel_residual = res;
+    check->backward_error = back;
+  }
   return x;
 }
 
-Vec solve_static(const Model& model, const Vec& F, const Vec& u_prescribed, double* rel_residual) {
+Vec solve_static(const Model& model, const Vec& F, const Vec& u_prescribed, SolveCheck* check) {
   Vec up(model.num_dofs(), 0.0);
   for (int d : model.fixed_dofs()) up[d] = u_prescribed[d];
   Vec Kup;
@@ -240,7 +250,7 @@ Vec solve_static(const Model& model, const Vec& F, const Vec& u_prescribed, doub
   for (std::size_t i = 0; i < rhs.size(); ++i) rhs[i] -= kf[i];
   SkylineMatrix K = model.assemble(1.0, 0.0);
   K.factor();
-  const Vec x = solve_checked(model, K, 1.0, 0.0, rhs, rel_residual);
+  const Vec x = solve_checked(model, K, 1.0, 0.0, rhs, check);
   model.scatter_free(x, up);
   return up;
 }

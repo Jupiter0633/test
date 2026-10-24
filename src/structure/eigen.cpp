@@ -149,9 +149,9 @@ EigenResult lowest_modes(const Model& model, int count, double shift, int max_it
     for (int c = 0; c < q; ++c) {
       model.scatter_free(X[c], full);
       model.apply_M(full, y);
-      double rr = 0.0;
-      Xb[c] = solve_checked(model, A, 1.0, -shift, model.restrict_free(y), &rr);
-      res.max_rel_residual = std::max(res.max_rel_residual, rr);
+      SolveCheck sc;
+      Xb[c] = solve_checked(model, A, 1.0, -shift, model.restrict_free(y), &sc);
+      res.check.merge(sc);
       deflate(Xb[c]);
       model.scatter_free(Xb[c], full);
       model.apply_K(full, y);

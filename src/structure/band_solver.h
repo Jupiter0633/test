@@ -20,7 +20,9 @@ class SkylineMatrix {
   double get(int i, int j) const;
 
   // 제자리 LDLᵀ 분해. 0 에 가까운 피벗(|d| ≤ 1e−14 |a_jj|)이면 예외.
+  // 분해 전에 ‖A‖_∞ (행 절댓값 합의 최댓값) 를 저장해 둔다 (역방향 오차 계산용).
   void factor();
+  double norm_inf() const { return norm_inf_; }
   bool factored() const { return factored_; }
   // 분해된 행렬로 A x = b 를 푼다 (b 를 x 로 덮어씀)
   void solve(std::vector<double>& b) const;
@@ -31,6 +33,7 @@ class SkylineMatrix {
   std::vector<std::size_t> start_;
   std::vector<double> values_;
   bool factored_ = false;
+  double norm_inf_ = 0.0;
 };
 
 }  // namespace hcw::structure

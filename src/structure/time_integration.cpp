@@ -34,9 +34,9 @@ void HhtIntegrator::initialize(const Vec& u0, const Vec& v0, const Vec& F0, cons
   model_.apply_M(a_, Ma);  // 자유 자리는 0 이라 M a_p 만 남음
   Vec r(model_.num_dofs());
   for (std::size_t i = 0; i < r.size(); ++i) r[i] = F0[i] - Ku[i] - Cv[i] - Ma[i];
-  double res = 0.0;
-  const Vec af = solve_checked(model_, Mff_, 0.0, 1.0, model_.restrict_free(r), &res);
-  max_res_ = std::max(max_res_, res);
+  SolveCheck sc;
+  const Vec af = solve_checked(model_, Mff_, 0.0, 1.0, model_.restrict_free(r), &sc);
+  check_.merge(sc);
   model_.scatter_free(af, a_);
   t_ = 0.0;
 }
@@ -65,9 +65,9 @@ void HhtIntegrator::step(const Vec& F_next, const Vec& up, const Vec& vp, const 
   for (std::size_t i = 0; i < n; ++i) {
     r[i] = s * F_next[i] - alpha_ * F_[i] - Ma[i] - s * (Cvs[i] + Kus[i]) + alpha_ * (Cvn[i] + Kun[i]);
   }
-  double res = 0.0;
-  const Vec af = solve_checked(model_, A_, cK_, cM_, model_.restrict_free(r), &res);
-  max_res_ = std::max(max_res_, res);
+  SolveCheck sc;
+  const Vec af = solve_checked(model_, A_, cK_, cM_, model_.restrict_free(r), &sc);
+  check_.merge(sc);
   Vec afull(n, 0.0);
   model_.scatter_free(af, afull);
   for (std::size_t i = 0; i < n; ++i) {

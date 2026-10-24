@@ -28,6 +28,15 @@ double SkylineMatrix::get(int i, int j) const {
 
 void SkylineMatrix::factor() {
   const int n = size();
+  std::vector<double> rowsum(n, 0.0);
+  for (int j = 0; j < n; ++j) {
+    for (int i = top_[j]; i <= j; ++i) {
+      const double v = std::abs(values_[at(i, j)]);
+      rowsum[i] += v;
+      if (i != j) rowsum[j] += v;
+    }
+  }
+  norm_inf_ = n > 0 ? *std::max_element(rowsum.begin(), rowsum.end()) : 0.0;
   for (int j = 0; j < n; ++j) {
     const int tj = top_[j];
     double* cj = values_.data() + start_[j];  // cj[i − tj] = (i, j) 자리
