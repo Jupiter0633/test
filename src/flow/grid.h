@@ -17,6 +17,8 @@ struct Grid {
   Geometry geometry = Geometry::Planar;
   int nr = 0, nz = 0;
   double r0 = 0, r1 = 1, z0 = 0, z1 = 1;
+  // 주기 경계 (해석기가 경계 조건에서 켠다). 늘어나는 격자에서 끝 면의 중심 거리를 맞은편 셀까지로 잡는다.
+  bool periodic_r = false, periodic_z = false;
 
   Grid() = default;
   // 균일 격자
@@ -35,15 +37,17 @@ struct Grid {
   double drc(int i) const { return uniform_ ? hr_ : rf(i + 1) - rf(i); }
   double dzc(int j) const { return uniform_ ? hz_ : zf(j + 1) - zf(j); }
   // 면을 사이에 둔 두 셀 중심 사이 거리 (r 면 i, z 면 j). 영역 경계 면 (0, n) 은 붙은 셀의 폭
-  // (벽·축의 유령 셀이 그 셀의 거울상이라 중심 거리가 셀 폭과 같다).
+  // (벽·축의 유령 셀이 그 셀의 거울상이라 중심 거리가 셀 폭과 같다). 주기 경계면 맞은편 끝 셀과의 거리.
   double drn(int i) const {
     if (uniform_) return hr_;
+    if ((i <= 0 || i >= nr) && periodic_r) return 0.5 * (drc(0) + drc(nr - 1));
     if (i <= 0) return drc(0);
     if (i >= nr) return drc(nr - 1);
     return rc(i) - rc(i - 1);
   }
   double dzn(int j) const {
     if (uniform_) return hz_;
+    if ((j <= 0 || j >= nz) && periodic_z) return 0.5 * (dzc(0) + dzc(nz - 1));
     if (j <= 0) return dzc(0);
     if (j >= nz) return dzc(nz - 1);
     return zc(j) - zc(j - 1);

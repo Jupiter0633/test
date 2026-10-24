@@ -62,6 +62,8 @@ FlowSolver::FlowSolver(Problem problem, SolverOptions options)
       periodic_z_ != (bc.z_max.kind == BoundaryKind::Periodic)) {
     throw std::invalid_argument("periodic boundaries must be paired");
   }
+  p_.grid.periodic_r = periodic_r_;
+  p_.grid.periodic_z = periodic_z_;
   if (bc.r_max.kind == BoundaryKind::Axis || bc.z_min.kind == BoundaryKind::Axis ||
       bc.z_max.kind == BoundaryKind::Axis) {
     throw std::invalid_argument("axis boundary is only allowed at r_min");

@@ -138,6 +138,7 @@ GridRun run_1a_grid_impl(int n, bool variable, flow::Convection conv, const Grid
 
   Problem pb;
   pb.grid = make_grid(plan, n, Geometry::Axisymmetric, n, n, 0.0, 1.0, 0.0, 1.0);
+  pb.grid.periodic_z = true;  // 아래 z 주기 경계 (오차 가중치의 끝 면 간격도 해석기와 같게)
   const Grid g = pb.grid;
   pb.bc.r_min.kind = BoundaryKind::Axis;
   pb.bc.r_max.kind = BoundaryKind::Wall;
