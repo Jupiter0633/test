@@ -1,0 +1,4 @@
+# 입력 파일과 잠금 파일은 LF 로 저장한다 (해시는 줄바꿈을 정규화하므로 필수는 아님).
+*.case text eol=lf
+*.lock text eol=lf
+*.ini  text eol=lf

@@ -1,0 +1,8 @@
+# 개발용 임시 입력 예시. 논문 조건이 아닙니다.
+# 개발용 입력은 cases/dev/ 에 두고, 파일 이름과 name 은 DEV_ 로 시작해야 합니다.
+# P0 에서는 [case] 섹션만 해석합니다. 물리 입력 섹션은 P1 이후에 추가됩니다.
+
+[case]
+name = DEV_example
+purpose = development
+description = P0 build check
