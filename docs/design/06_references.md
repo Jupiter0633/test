@@ -49,6 +49,7 @@
 | R-35 | U. Jain, P. Vega-Martínez, D. van der Meer (2021), "Air entrapment and its effect on pressure impulses in the slamming of a flat disc on water," J. Fluid Mech. 928, A31, doi:10.1017/jfm.2021.846 (CC BY) | 본문 일부 확인 (출판사 공개 HTML 의 인용 문장, 요약 도구 경유, 2026-10-23). 그림·표 수치 미확인 | 원판 입수의 공기막 두께 (h₀ ≈ 7×10⁻³ R), 0.5 m/s 이상에서 공기막이 뚫리거나 밀려 나감, 중심 첨두압 ≈ 100 ρV², 힘 충격량 ≈ 고전 부가질량 (4/3)ρR³V | 3-H 실험 비교 후보 (반지름 4 cm, 0–3 m/s, 우리 조건과 가까움). 정량 비교 전 원문 PDF 의 수치·불확도 확인 필요 |
 | R-36 | Shi 외 (2025), "Mechanism of the sharp rise and fall of the impact force during water impact of a flat plate: compression-expansion behavior of trapped air layer," J. Fluids Struct. 138, 104393 | 서지·초록만 | 갇힌 공기층의 압축·팽창이 초기 힘의 급상승·급하강을 만듦 (수치) | 정성 근거만 |
 | R-37 | Kim, Kim, Kim (2021), J. Fluid Mech. — 표면 무늬가 있는 원판의 입수 | 2차 출처 (검색 요약) | 갇힌 공기 부피가 클수록 첨두 낮고 주기 길어짐 | 서지 확인 필요 |
+| R-38 | H. Sun, W. Ding, X. Zhao, Z. Sun (2022), "Numerical Study of Flat Plate Impact on Water Using a Compressible CIP–IBM–Based Model," J. Mar. Sci. Eng. 10(10), 1462, doi:10.3390/jmse10101462 (CC BY) | 본문 확인 (출판사 HTML, 2026-10-26) | 평판 입수 수치 해석의 격자 (2 mm, 반폭/Δ = 100) 와 Δt (5×10⁻⁶ s), 공기 쿠션과 압력 진동의 관계 | 격자·Δt 설정의 문헌 사례 (기준 수치로 쓰지 않음) |
 | R-29 | Shi, Qu, Liu, Zheng, Li (2026), "Influence of plate size on air cushioning during water entry," Phys. Rev. Fluids 11:104801 | 검색 결과로만 존재 확인, 내용 미확인 | 7-E 후보 | 최근 문헌. 원문 확인 전 사용 금지 |
 
 ## 확인하지 못해 본문에서 근거로 쓰지 않은 내용
