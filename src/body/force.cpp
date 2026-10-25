@@ -96,6 +96,34 @@ bool solve_small(int n, double* m, double* rhs) {
   return true;
 }
 
+// 벽 거리 최소제곱의 조건: 칸 크기 h 로 무차원화한 정규방정식을 부분 피벗 소거해
+// 가장 작은 피벗 / 가장 큰 대각 성분을 돌려준다 (0 에 가까우면 이웃 점들이 거의 한 줄에 놓여 계수가 정해지지 않음).
+double scaled_pivot_ratio(int n, const double* m, const int* power, double h) {
+  double a[25];
+  double diag = 0.0;
+  for (int r = 0; r < n; ++r) {
+    for (int c = 0; c < n; ++c) a[r * n + c] = m[r * n + c] / std::pow(h, power[r] + power[c]);
+    diag = std::max(diag, std::abs(a[r * n + r]));
+  }
+  double worst = 1e300;
+  for (int c = 0; c < n; ++c) {
+    int piv = c;
+    for (int r = c + 1; r < n; ++r) {
+      if (std::abs(a[r * n + c]) > std::abs(a[piv * n + c])) piv = r;
+    }
+    if (piv != c) {
+      for (int k = 0; k < n; ++k) std::swap(a[c * n + k], a[piv * n + k]);
+    }
+    worst = std::min(worst, std::abs(a[c * n + c]));
+    if (!(std::abs(a[c * n + c]) > 0.0)) return 0.0;
+    for (int r = c + 1; r < n; ++r) {
+      const double f = a[r * n + c] / a[c * n + c];
+      for (int k = c; k < n; ++k) a[r * n + k] -= f * a[c * n + k];
+    }
+  }
+  return diag > 0.0 ? worst / diag : 0.0;
+}
+
 double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const Shape& shape,
                            double zc, const flow::Array2D& w, double mu, double body_w) {
   double f = 0.0;
@@ -127,8 +155,18 @@ double axial_viscous_force(const flow::Grid& g, const CutGeometry& geom, const S
         ++count;
       }
     }
-    if (count < 2 * kN || !solve_small(kN, m, rhs)) continue;
-    f += mu * rhs[0] * g.metric(piece.r) * piece.length;
+    if (count < 2 * kN) continue;
+    // 늘어나는 격자에서 한 방향 칸만 얇으면 이웃 점이 거의 한 줄이 되어 5 항 맞춤이 정해지지 않는다
+    // (힘이 한 단계 10^28 N 까지 튀었음). 그때는 1 항 맞춤 u_z − W ≈ c1 d 로 ∂u_z/∂n 을 구한다.
+    constexpr int kPower[kN] = {1, 2, 2, 3, 3};
+    double dudn = 0.0;
+    if (scaled_pivot_ratio(kN, m, kPower, h) > 1e-9) {
+      if (!solve_small(kN, m, rhs)) continue;
+      dudn = rhs[0];
+    } else {
+      dudn = rhs[0] / m[0];  // Σ d (u − W) / Σ d²
+    }
+    f += mu * dudn * g.metric(piece.r) * piece.length;
   }
   return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
 }
