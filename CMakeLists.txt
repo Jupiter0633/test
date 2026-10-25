@@ -91,8 +91,23 @@ add_library(hcw_verify_cases STATIC
   src/verify/p4_cases.cpp)
 target_link_libraries(hcw_verify_cases PUBLIC hcw_flow)
 
+# P5: 축대칭 고체 구조 해석기 (유체 코드와 독립). 검증 시험은 별도 라이브러리 (03 §1.5)
+add_library(hcw_structure STATIC
+  src/structure/mesh.cpp
+  src/structure/element.cpp
+  src/structure/band_solver.cpp
+  src/structure/assembly.cpp
+  src/structure/loads.cpp
+  src/structure/eigen.cpp
+  src/structure/time_integration.cpp)
+target_include_directories(hcw_structure PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(hcw_structure PUBLIC hcw_parallel)
+
+add_library(hcw_verify_p5 STATIC src/verify/p5_cases.cpp)
+target_link_libraries(hcw_verify_p5 PUBLIC hcw_structure hcw_verify_cases)
+
 add_executable(hcw_verify src/app/verify_main.cpp)
-target_link_libraries(hcw_verify PRIVATE hcw_verify_cases hcw_core)
+target_link_libraries(hcw_verify PRIVATE hcw_verify_cases hcw_verify_p5 hcw_core)
 
 # 개발용 실험 (판정 아님, 결과 파일 없음)
 add_executable(hcw_dev src/app/dev_main.cpp)
