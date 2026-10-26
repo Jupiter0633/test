@@ -279,7 +279,10 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   const double zc0 = es.h0 * kA + hh;
   const double depth_end = es.kind == BodyKind::Wedge ? es.depth_end * kA * std::tan(es.beta_deg * kPi / 180.0)
                                                       : es.depth_end * kA;
-  const double t_end = (es.h0 * kA + depth_end) / kV;
+  double t_end = (es.h0 * kA + depth_end) / kV;
+  if (es.swept_diag) {  // 개발용: HCW_DEV_STOP_MS 가 있으면 그 시각에서 멈춘다 (발산 전 구간만 비교할 때)
+    if (const char* v = std::getenv("HCW_DEV_STOP_MS")) t_end = std::min(t_end, 1e-3 * std::atof(v));
+  }
 
   flow::Problem pb;
   const int nr = static_cast<int>(std::lround(es.r_max * es.n));
@@ -583,6 +586,11 @@ EntryOut run_entry_impl(const EntrySetup& es) {
         }
       }
       measure();
+      if (es.swept_diag && s.flow().stats().steps % 200 == 0) {  // 개발용: 멈춤 진단을 위한 잦은 진행 출력
+        std::fprintf(stderr, "    step %ld  t = %.5f ms  dt = %.2e s  max|u| = %.2f m/s  retries %ld  F = %.1f N\n",
+                     static_cast<long>(s.flow().stats().steps), s.time() * 1e3, dt, max_speed(s.flow()), retries,
+                     out.force.back());
+      }
       // 진행 상황 (오류 출력, 보고서에는 들어가지 않음): 끝 시각의 10 % 마다
       if (s.time() >= next_progress * t_end - 1e-15) {
         std::fprintf(stderr, "  progress %3.0f %%  t = %.3f ms  dt = %.2e s  max|u| = %.2f m/s  steps %ld  %.0f s\n",
