@@ -68,6 +68,77 @@ void test_cut_geometry() {
   expect(open.pieces.empty() && open.grid_fitted && open.open_u(3, 4) == 1.0, "open geometry");
 }
 
+// 절단 셀 운동량 기하 (07 설계 D1): 제어체적이 영역을 채우는지, 발산 정리, 해석값, 연속성
+void test_momentum_geometry() {
+  auto check_grid = [](const Grid& g, const body::Shape& shape, double zc, double tol, const std::string& name) {
+    const auto m = body::momentum_geometry(g, shape, zc);
+    const auto phi = body::fluid_fraction(g, shape, zc);
+    const bool axisym = g.geometry == Geometry::Axisymmetric;
+    auto area = [&](double a, double b) { return axisym ? 0.5 * (b * b - a * a) : b - a; };
+    double worst_u = 0.0, worst_w = 0.0, nz_sum = 0.0, scale = 0.0;
+    for (int j = 0; j < g.nz; ++j) {  // u 제어체적은 각 줄을 채운다
+      double a = 0.0, b = 0.0;
+      for (int i = 0; i <= g.nr; ++i) {
+        const auto& c = m.u[static_cast<std::size_t>(i) * g.nz + j];
+        a += c.theta * area(c.r0, c.r1) * (c.z1 - c.z0);
+      }
+      for (int i = 0; i < g.nr; ++i) b += phi(i, j) * area(g.rf(i), g.rf(i + 1)) * g.dzc(j);
+      worst_u = std::max(worst_u, std::abs(a - b) / b);
+    }
+    for (int i = 0; i < g.nr; ++i) {  // w 제어체적은 각 열을 채운다
+      double a = 0.0, b = 0.0;
+      for (int j = 0; j <= g.nz; ++j) {
+        const auto& c = m.w[static_cast<std::size_t>(i) * (g.nz + 1) + j];
+        a += c.theta * area(c.r0, c.r1) * (c.z1 - c.z0);
+        nz_sum += c.nz_area;
+        scale += std::abs(c.nz_area);
+      }
+      for (int j = 0; j < g.nz; ++j) b += phi(i, j) * area(g.rf(i), g.rf(i + 1)) * g.dzc(j);
+      worst_w = std::max(worst_w, std::abs(a - b) / b);
+    }
+    expect(worst_u < tol && worst_w < tol, name + ": momentum volumes tile the fluid volume (u " +
+                                               std::to_string(worst_u) + ", w " + std::to_string(worst_w) + ")");
+    expect(scale > 0.0 && std::abs(nz_sum) < 1e-12 * scale, name + ": closed body, sum of w-cell axial areas is zero");
+  };
+  const body::Cylinder disk(1.0, 0.2);
+  const Grid gu(Geometry::Axisymmetric, 30, 60, 0.0, 3.0, -3.0, 3.0);  // Δ = 0.1
+  check_grid(gu, disk, 0.0137, 1e-12, "disk, uniform grid");
+  // 구는 극의 제곱근 특이성 때문에 가우스 적분 오차가 남는다 (구간 나눔이 셀과 달라 약 4e−5)
+  check_grid(gu, body::Spheroid(1.0, 1.0), 0.0137, 1e-4, "sphere, uniform grid");
+  std::vector<double> rf, zf;
+  for (int i = 0; i <= 40; ++i) rf.push_back(3.0 * std::pow(i / 40.0, 1.3));
+  for (int j = 0; j <= 70; ++j) zf.push_back(-3.0 + 6.0 * (j / 70.0) + 0.2 * std::sin(kPi * j / 70.0));
+  check_grid(Grid::stretched(Geometry::Axisymmetric, rf, zf), disk, -0.0211, 1e-12, "disk, stretched grid");
+
+  // 해석값: 원판 (반경 1, 두께 0.2, 중심 zc) 의 옆벽을 가로지르는 u 제어체적
+  const double zc = 0.0137;
+  const auto m = body::momentum_geometry(gu, disk, zc);
+  int checked = 0;
+  for (int i = 1; i < gu.nr; ++i) {
+    for (int j = 0; j < gu.nz; ++j) {
+      const auto& c = m.u[static_cast<std::size_t>(i) * gu.nz + j];
+      if (!(c.r0 < 1.0 && c.r1 > 1.0)) continue;
+      const double h = std::max(0.0, std::min(c.z1, zc + 0.1) - std::max(c.z0, zc - 0.1));
+      if (h <= 0.0) continue;
+      const double v = 0.5 * (c.r1 * c.r1 - c.r0 * c.r0) * (c.z1 - c.z0);
+      const double theta = 1.0 - 0.5 * (1.0 - c.r0 * c.r0) * h / v;
+      // 옆벽 (r = 1) 의 법선은 유체 → 물체 = −r 방향, r 가중 넓이 1 · h
+      expect(std::abs(c.theta - theta) < 1e-12 && std::abs(c.nr_area + h) < 1e-12,
+             "disk side wall u-cell: theta and n_r area match the exact values");
+      ++checked;
+    }
+  }
+  expect(checked > 0, "disk side wall u-cells were found");
+
+  // 연속성: 물체를 칸의 1e-4 만큼 옮기면 θ 변화도 그 정도
+  const auto m2 = body::momentum_geometry(gu, disk, zc + 1e-5);
+  double jump = 0.0;
+  for (std::size_t k = 0; k < m.w.size(); ++k) jump = std::max(jump, std::abs(m.w[k].theta - m2.w[k].theta));
+  for (std::size_t k = 0; k < m.u.size(); ++k) jump = std::max(jump, std::abs(m.u[k].theta - m2.u[k].theta));
+  expect(jump > 0.0 && jump < 3e-4, "momentum volume fractions change continuously with the body position (" +
+                                        std::to_string(jump) + ")");
+}
+
 void test_potential() {
   verify::SpheroidPotential sphere(1.0, 1.0);
   expect(std::abs(sphere.added_mass_coefficient() - 0.5) < 1e-14, "sphere added mass coefficient 1/2");
@@ -321,6 +392,7 @@ void test_moving_body_stable() {
 int main() {
   test_shapes();
   test_cut_geometry();
+  test_momentum_geometry();
   test_potential();
   test_body_pressure();
   test_stokes_exact();

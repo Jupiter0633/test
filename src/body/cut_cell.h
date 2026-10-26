@@ -72,4 +72,28 @@ struct MomentumClasses {
 // order: 경계 보간 차수 (1: 직선, 2: 2차)
 MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double z_center, int order = 2);
 
+// 절단 셀 운동량 기하 (docs/design/07_cut_cell_momentum_design.md D1).
+// 엇갈린 격자의 운동량 제어체적:
+//   u 면 (i, j): r ∈ [rc(i−1), rc(i)] (i = 0 은 [r0, rc(0)], i = nr 은 [rc(nr−1), rf(nr)]), z ∈ [zf(j), zf(j+1)]
+//   w 면 (i, j): r ∈ [rf(i), rf(i+1)], z ∈ [zc(j−1), zc(j)] (j = 0 은 [zf(0), zc(0)], j = nz 는 [zc(nz−1), zf(nz)])
+// 이 제어체적들은 각 성분마다 영역을 빈틈없이 채운다.
+struct MomentumCell {
+  double r0 = 0.0, r1 = 0.0, z0 = 0.0, z1 = 0.0;  // 제어체적 경계
+  double theta = 1.0;         // 유체 부피 비율 (축대칭은 r 가중), 0..1
+  double planar_fluid = 0.0;  // 유체 부분의 r–z 평면 넓이 ∫∫ dr dz (축대칭 r 성분 압력 항용)
+  // 제어체적 네 면의 열린 비율 (r 면: r0·r1 쪽, z 면: z0·z1 쪽, z 면은 축대칭에서 r 가중)
+  double open_r0 = 1.0, open_r1 = 1.0, open_z0 = 1.0, open_z1 = 1.0;
+  // 제어체적 안 고체 표면의 ∫ n dA (r 가중, 2π 제외). n 은 유체에서 물체 쪽 법선 (BoundaryPiece 와 같은 방향).
+  double nr_area = 0.0, nz_area = 0.0;
+  // 고체 표면 조각의 대표점과 길이 (r–z 평면). 조각이 없으면 length = 0.
+  double r = 0.0, z = 0.0, length = 0.0;
+};
+
+struct MomentumGeometry {
+  std::vector<MomentumCell> u;  // (nr+1)*nz, 행 우선 (i * nz + j)
+  std::vector<MomentumCell> w;  // nr*(nz+1), 행 우선 (i * (nz+1) + j)
+};
+
+MomentumGeometry momentum_geometry(const flow::Grid& g, const Shape& shape, double z_center);
+
 }  // namespace hcw::body

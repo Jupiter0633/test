@@ -159,6 +159,125 @@ CutGeometry cut_geometry(const flow::Grid& g, const Shape& shape, double zc) {
   return c;
 }
 
+namespace {
+
+double snap01(double v) {
+  if (std::abs(v) < 1e-12) return 0.0;
+  if (std::abs(1.0 - v) < 1e-12) return 1.0;
+  return v;
+}
+
+// 상자 [r0, r1] × [z0, z1] 의 운동량 제어체적 기하. 부피는 fluid_fraction 과 같은 z 방향 합성 가우스 적분.
+MomentumCell box_cell(const flow::Grid& g, const Shape& shape, double zc, double r0, double r1, double z0,
+                      double z1) {
+  static const double x[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563,
+                              0.8611363115940526};
+  static const double w[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461,
+                              0.3478548451374538};
+  const bool axisym = g.geometry == flow::Geometry::Axisymmetric;
+  auto area = [&](double a, double b) { return axisym ? 0.5 * (b * b - a * a) : b - a; };
+  MomentumCell c;
+  c.r0 = r0;
+  c.r1 = r1;
+  c.z0 = z0;
+  c.z1 = z1;
+  const double dz = z1 - z0;
+  double solid = 0.0, solid_planar = 0.0;
+  const double s_lo = std::max(z0, zc - shape.half_height()), s_hi = std::min(z1, zc + shape.half_height());
+  if (s_hi > s_lo) {
+    constexpr int kSub = 8;
+    for (int s = 0; s < kSub; ++s) {
+      const double za = s_lo + (s_hi - s_lo) * s / kSub, zb = s_lo + (s_hi - s_lo) * (s + 1) / kSub;
+      for (int q = 0; q < 4; ++q) {
+        const double z = 0.5 * (za + zb) + 0.5 * (zb - za) * x[q];
+        double radius;
+        if (!shape.r_extent(z - zc, radius)) continue;
+        const double b = std::min(r1, radius);
+        if (b > r0) {
+          solid += 0.5 * (zb - za) * w[q] * area(r0, b);
+          solid_planar += 0.5 * (zb - za) * w[q] * (b - r0);
+        }
+      }
+    }
+  }
+  c.theta = snap01(1.0 - solid / (area(r0, r1) * dz));
+  c.planar_fluid = (r1 - r0) * dz - solid_planar;
+  if (c.theta == 1.0) c.planar_fluid = (r1 - r0) * dz;
+  if (c.theta == 0.0) c.planar_fluid = 0.0;
+
+  auto open_r = [&](double rr) {
+    double lo, hi;
+    if (!shape.z_extent(rr, lo, hi)) return 1.0;
+    return snap01(1.0 - solid_fraction_1d(z0, z1, lo + zc, hi + zc));
+  };
+  auto open_z = [&](double zz) {
+    double radius;
+    if (!shape.r_extent(zz - zc, radius)) return 1.0;
+    return snap01(1.0 - solid_fraction_z_face(g, r0, r1, radius));
+  };
+  c.open_r0 = open_r(r0);
+  c.open_r1 = open_r(r1);
+  c.open_z0 = open_z(z0);
+  c.open_z1 = open_z(z1);
+
+  // 유체 부분의 닫힌 표면에서 발산 정리: ∮ n_z dA = 0, ∮ n_r dA = ∫ ∇·e_r dV (축대칭 = 평면 넓이, 평면 = 0)
+  c.nz_area = area(r0, r1) * (c.open_z0 - c.open_z1);
+  const double ar0 = g.metric(r0) * dz, ar1 = g.metric(r1) * dz;
+  c.nr_area = (axisym ? c.planar_fluid : 0.0) - (c.open_r1 * ar1 - c.open_r0 * ar0);
+  if (c.theta == 1.0) {
+    c.nz_area = 0.0;
+    c.nr_area = 0.0;
+  }
+
+  // 대표점: 고체 경계가 상자 변과 만나는 두 점의 중점, 길이: 현의 길이
+  if (c.theta > 0.0 && c.theta < 1.0) {
+    std::vector<std::pair<double, double>> pts;
+    for (double rr : {r0, r1}) {
+      double lo, hi;
+      if (!shape.z_extent(rr, lo, hi)) continue;
+      for (double zz : {lo + zc, hi + zc}) {
+        if (zz > z0 && zz < z1) pts.emplace_back(rr, zz);
+      }
+    }
+    for (double zz : {z0, z1}) {
+      double radius;
+      if (!shape.r_extent(zz - zc, radius)) continue;
+      if (radius > r0 && radius < r1) pts.emplace_back(radius, zz);
+    }
+    if (pts.size() == 2) {
+      c.r = 0.5 * (pts[0].first + pts[1].first);
+      c.z = 0.5 * (pts[0].second + pts[1].second);
+      c.length = std::hypot(pts[1].first - pts[0].first, pts[1].second - pts[0].second);
+    }
+  }
+  return c;
+}
+
+}  // namespace
+
+MomentumGeometry momentum_geometry(const flow::Grid& g, const Shape& shape, double zc) {
+  if (g.geometry == flow::Geometry::Axisymmetric && g.r0 != 0.0) {
+    throw std::invalid_argument("bodies need an axisymmetric grid that starts at the axis");
+  }
+  MomentumGeometry m;
+  const int nr = g.nr, nz = g.nz;
+  m.u.resize(static_cast<std::size_t>(nr + 1) * nz);
+  m.w.resize(static_cast<std::size_t>(nr) * (nz + 1));
+  for (int i = 0; i <= nr; ++i) {
+    const double r0 = i == 0 ? g.rf(0) : g.rc(i - 1), r1 = i == nr ? g.rf(nr) : g.rc(i);
+    for (int j = 0; j < nz; ++j) {
+      m.u[static_cast<std::size_t>(i) * nz + j] = box_cell(g, shape, zc, r0, r1, g.zf(j), g.zf(j + 1));
+    }
+  }
+  for (int i = 0; i < nr; ++i) {
+    for (int j = 0; j <= nz; ++j) {
+      const double z0 = j == 0 ? g.zf(0) : g.zc(j - 1), z1 = j == nz ? g.zf(nz) : g.zc(j);
+      m.w[static_cast<std::size_t>(i) * (nz + 1) + j] = box_cell(g, shape, zc, g.rf(i), g.rf(i + 1), z0, z1);
+    }
+  }
+  return m;
+}
+
 MomentumClasses momentum_classes(const flow::Grid& g, const Shape& shape, double zc, int order) {
   MomentumClasses m;
   const int nz = g.nz;
