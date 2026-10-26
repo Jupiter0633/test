@@ -10,7 +10,7 @@
 | `04_development_phases.md` | 개발 단계표 (P0–P9), 진입/종료 조건 |
 | `05_open_decisions.md` | 미결정 항목 (지금 결정 / 단계 전 / 논문 조건) |
 | `06_references.md` | 참고문헌과 확인 수준 |
-| `07_cut_cell_momentum_design.md` | (초안, 미승인) 절단 셀에서 질량·운동량을 함께 보존하는 이동 경계 처리 설계안 |
+| `07_cut_cell_momentum_design.md` | (승인 2026-10-26) 절단 셀에서 질량·운동량을 함께 보존하는 이동 경계 처리 설계안 |
 
 핵심 규칙
 1. 실행 성공 ≠ 검증 통과. 상태는 `RUN_COMPLETED` / `RUN_HEALTHY` / `VERIFIED` / `VALIDATED` / `FAILED_*` 로 구분.
