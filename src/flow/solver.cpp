@@ -879,11 +879,15 @@ void FlowSolver::step_implicit(double dt) {
       }
     }
   }
-  for (const auto& f : mc.forcing) {
-    const int k = f.comp == 0 ? f.i * nz + f.j : nu + f.i * (nz + 1) + f.j;
-    if (kind[k] != 0) continue;  // 바깥 경계 면은 그대로
-    kind[k] = 2;
-    forcing[k] = &f;
+  // 절단 셀 (07 설계 D3): 경계 보간 행을 쓰지 않는다. 면 중심이 물체 안인 면 (죽은 면) 만 물체 속도로 고정하고,
+  // 나머지는 운동량 식을 풀되 물체 쪽 이웃과의 점성 결합을 벽까지 실제 거리로 바꾼다 (아래 wall_rows).
+  if (!opt_.cut_cell) {
+    for (const auto& f : mc.forcing) {
+      const int k = f.comp == 0 ? f.i * nz + f.j : nu + f.i * (nz + 1) + f.j;
+      if (kind[k] != 0) continue;  // 바깥 경계 면은 그대로
+      kind[k] = 2;
+      forcing[k] = &f;
+    }
   }
 
   // 운동량이 값을 정한 면(고체 면·경계 보간면)은 투영이 고치지 않고 알려진 플럭스로 둔다.
@@ -893,8 +897,46 @@ void FlowSolver::step_implicit(double dt) {
     update_geometry(t1);
     const std::vector<char> was_active = pgeom_.active;
     pgeom_ = geom_;
-    // 절단 셀 (07 설계 D2): 원래 기하 그대로 — 모든 열린 면을 투영이 고치고, 유체가 있는 셀은 모두 압력 미지수
-    if (!opt_.cut_cell) {
+    // 절단 셀 (07 설계 D2·D3): 원래 기하에서 죽은 면 (물체 속도로 고정, kind 1) 만 닫는다. 경계 근처 면은
+    // 운동량 식을 푸는 면이므로 투영이 고친다. 유체가 있는 셀은 고칠 수 있는 면이 하나라도 있어야 하므로,
+    // 그런 면이 없으면 가장 넓게 열린 죽은 면을 다시 연다 (볼록 물체에서는 생기지 않을 것으로 보지만 안전장치).
+    if (opt_.cut_cell) {
+      for (int i = iu_lo_; i < iu_hi_; ++i) {
+        for (int j = 0; j < nz; ++j) {
+          if (kind[static_cast<std::size_t>(i * nz + j)] == 1) pgeom_.open_u(i, j) = 0.0;
+        }
+      }
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = jw_lo_; j < jw_hi_; ++j) {
+          if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] == 1) pgeom_.open_w(i, j) = 0.0;
+        }
+      }
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = 0; j < nz; ++j) {
+          const std::size_t c = static_cast<std::size_t>(i) * nz + j;
+          if (!geom_.active[c]) continue;
+          const bool axis = i == 0 && p_.bc.r_min.kind == BoundaryKind::Axis;
+          const bool any = (!axis && pgeom_.open_u(i, j) > 0.0) || pgeom_.open_u(i + 1, j) > 0.0 ||
+                           pgeom_.open_w(i, j) > 0.0 || pgeom_.open_w(i, j + 1) > 0.0;
+          if (any) continue;
+          double best = 0.0;
+          int which = -1;
+          const double cand[4] = {axis ? 0.0 : geom_.open_u(i, j), geom_.open_u(i + 1, j), geom_.open_w(i, j),
+                                  geom_.open_w(i, j + 1)};
+          for (int q = 0; q < 4; ++q) {
+            if (cand[q] > best) {
+              best = cand[q];
+              which = q;
+            }
+          }
+          if (which == 0) pgeom_.open_u(i, j) = geom_.open_u(i, j);
+          if (which == 1) pgeom_.open_u(i + 1, j) = geom_.open_u(i + 1, j);
+          if (which == 2) pgeom_.open_w(i, j) = geom_.open_w(i, j);
+          if (which == 3) pgeom_.open_w(i, j + 1) = geom_.open_w(i, j + 1);
+          ++stats_.cut_cell_reopened;
+        }
+      }
+    } else {
       for (int i = iu_lo_; i < iu_hi_; ++i) {
         for (int j = 0; j < nz; ++j) {
           if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
@@ -944,6 +986,47 @@ void FlowSolver::step_implicit(double dt) {
     }
   }
 
+  // 절단 셀 (07 설계 D3): 운동량을 푸는 면 k 의 이웃 면 c 가 물체 안 (죽은 면) 이면, 점성 결합 a_kc (u_c − u_k)
+  // 를 벽까지 실제 거리 d 로 바꾼 a_kc (h/d) (U_B − u_k) 로 대신한다 (h: 두 면 사이 거리). d 는 [0.05h, h] 로 자른다.
+  std::vector<std::vector<std::pair<int, double>>> wall_rows;
+  if (p_.body && opt_.cut_cell) {
+    wall_rows.resize(static_cast<std::size_t>(n));
+    const body::Shape& shape = *p_.body->shape;
+    const double zb = p_.body->z(t1);
+    auto solid_at = [&](int comp, int i, int j) {
+      return comp == 0 ? mc.solid_u[static_cast<std::size_t>(i) * nz + j] != 0
+                       : mc.solid_w[static_cast<std::size_t>(i) * (nz + 1) + j] != 0;
+    };
+    for (int comp = 0; comp < 2; ++comp) {
+      const int ni = comp == 0 ? g.nr + 1 : g.nr, nj = comp == 0 ? nz : nz + 1;
+      for (int i = 0; i < ni; ++i) {
+        for (int j = 0; j < nj; ++j) {
+          const int k = comp == 0 ? i * nz + j : nu + i * (nz + 1) + j;
+          if (kind[k] != 0) continue;
+          const double r = comp == 0 ? g.rf(i) : g.rc(i), z = comp == 0 ? g.zc(j) : g.zf(j);
+          const int d4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+          for (const auto& dd : d4) {
+            const int ii = i + dd[0], jj = j + dd[1];
+            if (ii < 0 || jj < 0 || ii >= ni || jj >= nj || !solid_at(comp, ii, jj)) continue;
+            const double rn = comp == 0 ? g.rf(ii) : g.rc(ii), zn = comp == 0 ? g.zc(jj) : g.zf(jj);
+            const double h = std::abs(rn - r) + std::abs(zn - z);
+            double d = h;
+            if (dd[0] != 0) {
+              double radius;
+              if (shape.r_extent(z - zb, radius)) d = dd[0] < 0 ? r - radius : radius - r;
+            } else {
+              double lo, hi;
+              if (shape.z_extent(r, lo, hi)) d = dd[1] < 0 ? z - (hi + zb) : (lo + zb) - z;
+            }
+            d = std::clamp(d, 0.05 * h, h);
+            const int c = comp == 0 ? ii * nz + jj : nu + ii * (nz + 1) + jj;
+            wall_rows[static_cast<std::size_t>(k)].emplace_back(c, h / d);
+          }
+        }
+      }
+    }
+  }
+
   // 행렬과 우변
   CsrMatrix a;
   a.n = n;
@@ -985,6 +1068,20 @@ void FlowSolver::step_implicit(double dt) {
         const double grad = (p_inc_(i, j) - p_inc_(i, j - 1)) / (m.rho_w(i, j) * g.dzn(j));
         const double hist = bdf2 ? (c1 * w_(i, j) - c2 * w_prev_(i, j)) / dt : w_(i, j) / dt;
         b[k] = hist + fw(i, j) + cw(i, j) - grad;
+      }
+      if (!wall_rows.empty()) {
+        // 행은 (c0/Δt) u − A u. a_kc (u_c − u_k) → a_kc (h/d)(U_B − u_k): 열 c 를 없애고 대각과 우변을 고친다.
+        const double ub = k < nu ? 0.0 : ub_w;
+        for (const auto& [c, fac] : wall_rows[static_cast<std::size_t>(k)]) {
+          double akc = 0.0;
+          for (int q = visc_.row_start[k]; q < visc_.row_start[k + 1]; ++q) {
+            if (visc_.col[q] == c) akc += visc_.val[q];
+          }
+          if (akc == 0.0) continue;
+          row.emplace_back(c, akc);                // −A 의 열 c 항 (−a_kc) 을 지운다
+          row.emplace_back(k, -akc + akc * fac);  // 대각: −(A_kk + a_kc − a_kc fac)
+          b[k] += akc * fac * ub;
+        }
       }
     }
     std::sort(row.begin(), row.end());

@@ -150,7 +150,9 @@ GridRun guarded(const std::string& label, int n, const std::function<void(GridRu
 }  // namespace
 
 // ---------------------------------------------------------------- 1-E
-TestReport run_1e(bool quick) {
+namespace {
+// opt: 개발 비교용 (07 설계 절단 셀 스위치). 정식 1-E 는 기본값.
+TestReport run_1e_impl(bool quick, const flow::SolverOptions& opt) {
   TestReport rep = p2_report("1-E", "Sphere accelerated from rest: force at t = 0 (added mass)");
   const double a = 1.0, rho = 1.0, A = 1.0;
   auto pot = std::make_shared<SpheroidPotential>(a, a);
@@ -202,7 +204,7 @@ TestReport run_1e(bool quick) {
       pb.material = std::make_shared<flow::SmoothMaterial>(
           [rho](double, double, double) { return rho; }, [mu_b](double, double, double) { return mu_b; },
           false);
-      FlowSolver s(pb);
+      FlowSolver s(pb, opt);
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; });
       std::vector<double> ratio;
       while (s.time() < t_end - 1e-12) {
@@ -251,6 +253,9 @@ TestReport run_1e(bool quick) {
   }
   return rep;
 }
+}  // namespace
+
+TestReport run_1e(bool quick) { return run_1e_impl(quick, {}); }
 
 // ---------------------------------------------------------------- 1-F
 TestReport run_1f(bool quick) {
@@ -323,7 +328,8 @@ TestReport run_1f(bool quick) {
 }
 
 // ---------------------------------------------------------------- 1-G
-TestReport run_1g(bool quick) {
+namespace {
+TestReport run_1g_impl(bool quick, const flow::SolverOptions& opt) {
   TestReport rep = p2_report("1-G", "Sphere in Stokes flow (Ua/nu = 1e-3): steady drag");
   rep.criteria_commit = "c69da11";  // 측정을 제어면 운동량 수지로 변경 (03 §1.2 1-G 변경 기록)
   const double a = 1.0, rho = 1.0, U = 1.0, mu = 1000.0;
@@ -349,7 +355,7 @@ TestReport run_1g(bool quick) {
       pb.material = std::make_shared<flow::SmoothMaterial>(
           [rho](double, double, double) { return rho; }, [mu](double, double, double) { return mu; },
           false);
-      FlowSolver s(pb);
+      FlowSolver s(pb, opt);
       s.initialize(0.0, [](double, double) { return 0.0; }, [U](double, double) { return U; });
       int steps = 0;
       do {
@@ -389,6 +395,31 @@ TestReport run_1g(bool quick) {
                       "surface pressure); exact split pressure 2 pi mu a U = " + fmt(exact / 3.0) +
                       ", viscous 4 pi mu a U = " + fmt(2.0 * exact / 3.0));
   conclude(rep, quick);
+  return rep;
+}
+}  // namespace
+
+TestReport run_1g(bool quick) { return run_1g_impl(quick, {}); }
+
+TestReport dev_p2_cut_cell(bool quick, bool cut_cell) {
+  flow::SolverOptions opt;
+  opt.cut_cell = cut_cell;
+  TestReport g = run_1g_impl(quick, opt);
+  TestReport e = run_1e_impl(quick, opt);
+  TestReport rep = p2_report("dev-P2-cut", std::string("1-G and 1-E with the cut-cell switch ") +
+                                               (cut_cell ? "on" : "off") + " (development only)");
+  for (auto r : g.runs) {
+    r.label = "1-G " + r.label;
+    rep.runs.push_back(r);
+  }
+  for (auto r : e.runs) {
+    r.label = "1-E " + r.label;
+    rep.runs.push_back(r);
+  }
+  for (const auto& n : g.notes) rep.notes.push_back("1-G: " + n);
+  for (const auto& n : e.notes) rep.notes.push_back("1-E: " + n);
+  rep.notes.push_back("verdicts as if judged: 1-G " + g.verdict + ", 1-E " + e.verdict + " (development only)");
+  rep.verdict = "DEV_ONLY";
   return rep;
 }
 

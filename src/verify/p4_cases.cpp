@@ -66,6 +66,8 @@ struct EntrySetup {
   double snapshot_interval = 0.0;
   // 물 압력 하한 (03 §1.4 구현 보충, 2026-10-23). 개발 비교용으로 끌 수 있다.
   bool water_floor = true;
+  // 절단 셀 이동 경계 (07 설계, 개발 비교용, SolverOptions::cut_cell)
+  bool cut_cell = false;
   // 늘어나는 격자 (03 §1.4 P4 새 조건): n = a/Δ_core, core r ≤ 1.3a, −0.4a ≤ z ≤ 0.2a,
   // 바깥 크기 비 ≤ 1.05, 크기 상한 a/16 (영역은 기존 그대로)
   bool stretched = false;
@@ -329,6 +331,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   opt.projection_tolerance *= es.tol_factor;
   opt.pressure_tolerance *= es.tol_factor;
   if (es.water_floor) opt.water_pressure_floor = 2.3e3;  // 20 ℃ 물의 증기압
+  opt.cut_cell = es.cut_cell;
   auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
   interface::TwoPhaseSolver s(pb, mat, f0, true, opt);
   s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; }, false);
@@ -686,7 +689,8 @@ bool gci_fine(double phi1, double phi2, double phi3, double& gci, double& p) {
 }
 
 // ---------------------------------------------------------------- 개발용
-TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_floor, const std::string& history_csv) {
+TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_floor, const std::string& history_csv,
+                           bool cut_cell) {
   TestReport rep = p4_report("dev-dt", "Disk entry time-step study (development only, not a verdict)");
   EntrySetup es;
   es.n = n;
@@ -696,6 +700,8 @@ TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_f
   es.cv = true;
   es.swept_diag = !history_csv.empty();
   es.spike_prefix = history_csv;
+  es.cut_cell = cut_cell;
+  if (cut_cell) rep.notes.push_back("cut-cell boundary switch: on (development)");
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
   if (o.run.failure.empty()) {

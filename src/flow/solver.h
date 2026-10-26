@@ -123,6 +123,8 @@ struct SolverStats {
   long pressure_floor_cells = 0;
   // water_pressure_floor 가 올린 셀 수의 누적
   long water_floor_cells = 0;
+  // 절단 셀 (07 설계 D3): 고칠 수 있는 면이 없어 죽은 면을 다시 연 셀 수의 누적 (0 이어야 정상)
+  long cut_cell_reopened = 0;
 };
 
 class FlowSolver {

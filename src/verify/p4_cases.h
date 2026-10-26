@@ -31,8 +31,9 @@ TestReport dev_3g(bool quick, bool cut_cell, double z_shift_over_a);
 // stretched = true 이면 P4 새 조건의 늘어나는 격자 (n = a/Δ_core). dt_factor 는 그대로 곱한다.
 // water_floor = false 이면 물 압력 하한을 끈다 (3-F 원인 비교용)
 // history_csv 가 비어 있지 않으면 반 단계마다 F_s, F_cv, 축 위 간격 등을 그 파일에 쓴다
+// cut_cell = true 이면 절단 셀 이동 경계 스위치 (SolverOptions::cut_cell, 07 설계) 를 켠다
 TestReport entry_dev_study(int n, double dt_factor, bool stretched = false, bool water_floor = true,
-                           const std::string& history_csv = "");
+                           const std::string& history_csv = "", bool cut_cell = false);
 
 // 개발용 그림 자료: 위와 같은 원판 입수를 계산하며 interval [s] 마다 셀 값 (snap_NNN.csv) 과
 // 끝에 시간 이력 (history.csv: t, 힘, 바닥 평균 압력, 포켓 압력) 을 dir 에 쓴다. 그림은 tools/plot_entry.py.
