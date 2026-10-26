@@ -23,7 +23,8 @@ void usage() {
                "  entry-dt  disk entry (P4 3-B conditions) with the time-step rule scaled by <dt factor>;\n"
                "            prints impulse, peaks and the 3-F surface vs control-volume force (development only)\n"
                "  entry-snap  same run, writing cell snapshots and history.csv for tools/plot_entry.py\n"
-               "  --stretched  P4 stretched grid (a/dx is then a/dx_core); add it to either command\n";
+               "  --stretched  P4 stretched grid (a/dx is then a/dx_core); add it to either command\n"
+               "  --history <file>  entry-dt only: write the half-step F_s / F_cv history as CSV\n";
 }
 
 }  // namespace
@@ -34,9 +35,18 @@ int main(int argc, char** argv) {
   int threads = parallel::threads_from_environment(thread_error);
   bool stretched = false;  // P4 새 조건의 늘어나는 격자 (n = a/Δ_core)
   bool water_floor = true;  // --no-water-floor: 물 압력 하한 끔 (entry-dt 개발 비교용)
+  std::string history_csv;  // --history <file>: entry-dt 의 반 단계 F_s / F_cv 전체 이력
   for (auto it = args.begin(); it != args.end();) {
     if (*it == "--no-water-floor") {
       water_floor = false;
+      it = args.erase(it);
+    } else if (*it == "--history") {
+      it = args.erase(it);
+      if (it == args.end()) {
+        std::cerr << "error: --history needs a file name\n";
+        return 1;
+      }
+      history_csv = *it;
       it = args.erase(it);
     } else if (*it == "--stretched") {
       stretched = true;
@@ -79,7 +89,7 @@ int main(int argc, char** argv) {
   const verify::TestReport rep =
       snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str()),
                                          !(args.size() == 6 && args[5] == "no-water-floor"), stretched)
-           : verify::entry_dev_study(n, f, stretched, water_floor);
+           : verify::entry_dev_study(n, f, stretched, water_floor, history_csv);
   for (const auto& r : rep.runs) {
     std::cout << "[" << r.label << "]" << (r.failure.empty() ? "" : "  " + r.failure) << "\n";
     for (const auto& [k, v] : r.metrics) std::cout << "  " << k << " = " << v << "\n";

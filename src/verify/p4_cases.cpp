@@ -604,7 +604,7 @@ bool gci_fine(double phi1, double phi2, double phi3, double& gci, double& p) {
 }
 
 // ---------------------------------------------------------------- 개발용
-TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_floor) {
+TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_floor, const std::string& history_csv) {
   TestReport rep = p4_report("dev-dt", "Disk entry time-step study (development only, not a verdict)");
   EntrySetup es;
   es.n = n;
@@ -633,6 +633,15 @@ TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_f
       hs += (hs.empty() ? "" : ", ") + fmt(o.t[k + 1] * 1e3) + "ms:" + fmt(o.fs_half[k]) + "/" + fmt(o.fcv_half[k]);
     }
     rep.notes.push_back("F_s / F_cv (N) at half steps: " + hs);
+    if (!history_csv.empty()) {  // 반 단계마다 두 힘 전체 이력 (3-F 차이가 생기는 시점 확인용)
+      std::ofstream h(history_csv);
+      h << "t_mid,dt,f_s,f_cv,gap_axis,p_bottom,p_min_abs\n";
+      for (std::size_t k = 0; k < o.fs_half.size(); ++k) {
+        h << 0.5 * (o.t[k] + o.t[k + 1]) << "," << o.t[k + 1] - o.t[k] << "," << o.fs_half[k] << "," << o.fcv_half[k]
+          << "," << o.gap_axis[k + 1] << "," << o.p_bottom[k + 1] << "," << o.p_min_abs[k + 1] << "\n";
+      }
+      rep.notes.push_back("half-step force history written to " + history_csv);
+    }
   }
   rep.runs.push_back(o.run);
   rep.verdict = o.run.failure.empty() ? "DEV_ONLY" : "DEV_ONLY (" + o.run.failure.substr(0, o.run.failure.find(' ')) + ")";
