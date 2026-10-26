@@ -180,8 +180,31 @@ void test_stretched_faces() {
 
 }  // namespace
 
+// 07 설계 D2: 절단 셀 스위치를 켜도 정지 수중 원통 (3-G 조건, 빠른 격자, 격자면에서 벗어난 위치) 의
+// 정수압 부력과 정지 상태가 그대로인지
+void test_cut_cell_static_buoyancy() {
+  // 원통을 격자면에서 칸의 0.37 만큼 옮겨 위·아래 면에 절단 셀이 생기게 한다 (S-5 core 칸 = a/16)
+  const double shift = 0.37 / 16.0;
+  const verify::TestReport off = verify::dev_3g(true, false, shift);
+  const verify::TestReport on = verify::dev_3g(true, true, shift);
+  expect(off.runs.size() == 1 && on.runs.size() == 1 && off.runs[0].failure.empty() && on.runs[0].failure.empty(),
+         "3-G quick runs finish with and without the cut-cell switch");
+  if (on.runs.empty() || !on.runs[0].failure.empty()) return;
+  const auto& m = on.runs[0].metrics;
+  const double err = m.at("force_relative_error"), v = m.at("max_speed_over_run");
+  std::cout << "  3-G quick: force error off " << off.runs[0].metrics.at("force_relative_error") << ", on " << err
+            << "; max speed off " << off.runs[0].metrics.at("max_speed_over_run") << ", on " << v << " m/s"
+            << "; cut cells " << m.at("cut_cells") << ", pressure unknowns off "
+            << off.runs[0].metrics.at("pressure_unknowns") << ", on " << m.at("pressure_unknowns") << "\n";
+  expect(m.at("cut_cells") > 0.0 && m.at("pressure_unknowns") > off.runs[0].metrics.at("pressure_unknowns"),
+         "cut-cell switch adds the thin cut cells to the pressure unknowns");
+  expect(err < 1e-6, "cut-cell switch: buoyancy force error " + std::to_string(err));
+  expect(v < 1e-8, "cut-cell switch: still water stays still (max speed " + std::to_string(v) + " m/s)");
+}
+
 int main() {
   test_stretched_faces();
+  test_cut_cell_static_buoyancy();
   test_fluid_fraction_cylinder();
   test_wedge_shape();
   test_combined_flux_divergence_free();

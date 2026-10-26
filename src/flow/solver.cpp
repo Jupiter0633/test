@@ -893,25 +893,28 @@ void FlowSolver::step_implicit(double dt) {
     update_geometry(t1);
     const std::vector<char> was_active = pgeom_.active;
     pgeom_ = geom_;
-    for (int i = iu_lo_; i < iu_hi_; ++i) {
-      for (int j = 0; j < nz; ++j) {
-        if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
+    // 절단 셀 (07 설계 D2): 원래 기하 그대로 — 모든 열린 면을 투영이 고치고, 유체가 있는 셀은 모두 압력 미지수
+    if (!opt_.cut_cell) {
+      for (int i = iu_lo_; i < iu_hi_; ++i) {
+        for (int j = 0; j < nz; ++j) {
+          if (kind[static_cast<std::size_t>(i * nz + j)] != 0) pgeom_.open_u(i, j) = 0.0;
+        }
       }
-    }
-    for (int i = 0; i < g.nr; ++i) {
-      for (int j = jw_lo_; j < jw_hi_; ++j) {
-        if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] != 0) pgeom_.open_w(i, j) = 0.0;
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = jw_lo_; j < jw_hi_; ++j) {
+          if (kind[static_cast<std::size_t>(nu + i * (nz + 1) + j)] != 0) pgeom_.open_w(i, j) = 0.0;
+        }
       }
-    }
-    for (int i = 0; i < g.nr; ++i) {
-      for (int j = 0; j < nz; ++j) {
-        // 축 (축대칭) 과 대칭면 (평면, P4) 의 r = 0 면은 속도가 정해져 압력을 잇지 않는다.
-        // 대칭면 면을 열린 면으로 세면 물체 옆에서 이웃과 끊긴 셀이 압력 미지수가 되어
-        // 압축성 항만 남아 폭주한다 (2026-10-23, 쐐기 3-A 개발 실행).
-        const bool west = !(i == 0 && p_.bc.r_min.kind == BoundaryKind::Axis) && pgeom_.open_u(i, j) > 0.0;
-        const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
-                         pgeom_.open_w(i, j + 1) > 0.0;
-        pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
+      for (int i = 0; i < g.nr; ++i) {
+        for (int j = 0; j < nz; ++j) {
+          // 축 (축대칭) 과 대칭면 (평면, P4) 의 r = 0 면은 속도가 정해져 압력을 잇지 않는다.
+          // 대칭면 면을 열린 면으로 세면 물체 옆에서 이웃과 끊긴 셀이 압력 미지수가 되어
+          // 압축성 항만 남아 폭주한다 (2026-10-23, 쐐기 3-A 개발 실행).
+          const bool west = !(i == 0 && p_.bc.r_min.kind == BoundaryKind::Axis) && pgeom_.open_u(i, j) > 0.0;
+          const bool any = west || pgeom_.open_u(i + 1, j) > 0.0 || pgeom_.open_w(i, j) > 0.0 ||
+                           pgeom_.open_w(i, j + 1) > 0.0;
+          pgeom_.active[static_cast<std::size_t>(i) * nz + j] = any ? 1 : 0;
+        }
       }
     }
     if (!pgeom_.active.back()) {

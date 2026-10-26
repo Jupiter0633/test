@@ -21,6 +21,10 @@ TestReport run_3g(bool quick, const GridPlan* plan = nullptr);
 TestReport run_s(const std::string& id, bool quick);
 TestReport run_3i(bool quick);
 
+// 개발용 (판정 아님): 3-G 조건 (정지 수중 원통의 정수압 부력). cut_cell: 절단 셀 스위치 (07 설계),
+// z_shift_over_a: 원통을 격자면에서 벗어나게 옮기는 거리 / a (절단 셀이 생기게 함)
+TestReport dev_3g(bool quick, bool cut_cell, double z_shift_over_a);
+
 // 개발용 (판정 아님, 결과 저장 안 함): 3-B 조건 원판 입수를 a/Δ = n, Δt 규칙 × dt_factor 로 계산한다.
 // 3-F 의 제어면 힘도 함께 구해 충격량·첨두값·두 힘의 차이와 시간 이력을 돌려준다 (verdict = DEV_ONLY).
 // 시간 간격 수렴 실험 (P4-analysis-2026-10-23.md) 용.

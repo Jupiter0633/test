@@ -101,6 +101,10 @@ struct SolverOptions {
   // 올린다 (공동화의 단순 근사). 작은 공기 셀이 한 단계에 사라질 때 물에 비물리적 인장 (−600 kPa) 과
   // 한 단계 힘 튐이 생기던 것을 막는다 (2026-10-23 비교, P4 는 2.3 kPa = 20 ℃ 증기압).
   double water_pressure_floor = 0.0;
+  // 절단 셀 이동 경계 (docs/design/07_cut_cell_momentum_design.md, 개발 중, 기본 끔 = 기존 경계 보간 방식).
+  // D2: 투영이 원래 열린 비율의 모든 면을 고치고, 유체가 있는 모든 셀이 압력 미지수가 된다
+  //     (경계 보간 면을 닫고 그 셀의 발산을 버리던 처리를 하지 않는다). 운동량 행은 아직 기존 방식.
+  bool cut_cell = false;
 };
 
 struct SolverStats {

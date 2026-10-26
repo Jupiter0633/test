@@ -980,7 +980,11 @@ TestReport run_3f(bool quick) {
 }
 
 // ---------------------------------------------------------------- 3-G
-TestReport run_3g(bool quick, const GridPlan* plan) {
+namespace {
+
+// cut_cell: 절단 셀 이동 경계 (07 설계, 개발 중). z_shift [m]: 원통을 격자면에서 벗어나게 옮김 (개발용).
+// 정식 3-G 는 false, 0.
+TestReport run_3g_impl(bool quick, const GridPlan* plan, bool cut_cell, double z_shift) {
   TestReport rep = p4_report("3-G", "Static buoyancy of a submerged closed cylinder");
   if (plan) {  // 늘어나는 격자 (S-5, 03 §1.4, 격자 조건 변경 acd6130)
     rep.id = plan->id;
@@ -1011,7 +1015,7 @@ TestReport run_3g(bool quick, const GridPlan* plan) {
       pb.gravity = {0.0, -kG};
       const Grid g = pb.grid;
       const auto shape = std::make_shared<body::Cylinder>(kA, 2.0 * kA);
-      const double zc = -2.0 * kA;  // 윗면 −a
+      const double zc = -2.0 * kA + z_shift;  // 윗면 −a (개발용 z_shift 만큼 옮김)
       Array2D f(g.nr, g.nz);
       for (int i = 0; i < g.nr; ++i) {
         for (int j = 0; j < g.nz; ++j) f(i, j) = std::clamp((0.0 - g.zf(j)) / g.dzc(j), 0.0, 1.0);
@@ -1031,6 +1035,7 @@ TestReport run_3g(bool quick, const GridPlan* plan) {
       opt.convection = flow::Convection::Consistent;
   opt.time_order = 2;            // 03 §1.4 2차 시간 적분 (b8ebdf3)
   opt.air_pressure_floor = 1e3;  // 03 §1.4 공기 압력 하한
+      opt.cut_cell = cut_cell;
       auto mat = std::make_shared<interface::VofMaterial>(kRhoW, kMuW, kRhoA, kMuA);
       interface::TwoPhaseSolver s(pb, mat, f, true, opt);
       s.initialize(0.0, [](double, double) { return 0.0; }, [](double, double) { return 0.0; }, false);
@@ -1050,6 +1055,13 @@ TestReport run_3g(bool quick, const GridPlan* plan) {
       run.metrics["buoyancy_exact"] = buoy;
       run.metrics["force_relative_error"] = std::abs(force - buoy) / buoy;
       run.metrics["max_speed_over_run"] = vmax;
+      if (cut_cell || z_shift != 0.0) {  // 개발용: 압력 미지수 셀 수와 절단 셀 수 (스위치 효과 확인)
+        long unknowns = 0, cut = 0;
+        for (char c : s.flow().pressure_geometry().active) unknowns += c ? 1 : 0;
+        for (double v : phi.data()) cut += (v > 0.0 && v < 1.0) ? 1 : 0;
+        run.metrics["pressure_unknowns"] = static_cast<double>(unknowns);
+        run.metrics["cut_cells"] = static_cast<double>(cut);
+      }
       run.seconds = seconds_since(t0);
       finish_run(run, s.flow());
     } catch (const std::exception& e) {
@@ -1071,6 +1083,21 @@ TestReport run_3g(bool quick, const GridPlan* plan) {
                       fmt(buoy) + " N; still water from the discrete hydrostatic pressure + 1e5 Pa, dt = 0.1 dx / "
                       "sqrt(g a), " + std::to_string(steps) + " steps; max speed is report only");
   conclude(rep, quick);
+  return rep;
+}
+
+}  // namespace
+
+TestReport run_3g(bool quick, const GridPlan* plan) { return run_3g_impl(quick, plan, false, 0.0); }
+
+TestReport dev_3g(bool quick, bool cut_cell, double z_shift_over_a) {
+  TestReport rep = run_3g_impl(quick, nullptr, cut_cell, z_shift_over_a * kA);
+  rep.id = "dev-3G";
+  rep.title += " (cut-cell boundary, development only)";
+  rep.notes.push_back(std::string("cut-cell switch ") + (cut_cell ? "on" : "off") +
+                      " (docs/design/07_cut_cell_momentum_design.md), cylinder shifted by " + fmt(z_shift_over_a) +
+                      " a; development only, not a verdict");
+  rep.verdict = "DEV_ONLY (" + rep.verdict + ")";
   return rep;
 }
 
