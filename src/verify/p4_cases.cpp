@@ -58,6 +58,7 @@ struct EntrySetup {
   double tol_factor = 1.0;
   double kappa = 1.4;  // 0 이면 비압축 공기
   bool cv = false;     // 3-F 제어면 운동량 수지
+  bool swept_diag = false;  // 개발용 진단: 물체가 쓸고 지나간 셀의 운동량 (entry-dt 전용)
   double cv_rs = 2.0, cv_zb = -2.0, cv_zt = 1.25;
   // 개발용 그림 자료: 비어 있지 않으면 snapshot_interval [s] 마다 셀 값을 이 폴더에 CSV 로 쓴다
   std::string snapshot_dir;
@@ -85,6 +86,8 @@ struct EntryOut {
   std::vector<double> pocket_vol, p_min_abs, floor_cells, gap_axis;
   // 3-F: 반 단계 시각의 표면 힘과 제어면 힘
   std::vector<double> fs_half, fcv_half;
+  // 개발용 진단: 물체가 지나가며 고체가 된 셀의 유체가 가졌던 운동량 / Δt (물체 속도로 움직였다고 보고 근사)
+  std::vector<double> swept_half;
   double impulse = 0.0, impulse_cv = 0.0;
 };
 
@@ -344,6 +347,7 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   double f_prev = 0.0, t_prev = 0.0;
   CvTerms cv_prev;
   bool have_prev = false;
+  Array2D phi_prev, f_prev_vof;  // 개발용 진단 (swept_half) 의 직전 단계 값
 
   auto gauge_ref = [&]() {
     // 압축성: 대기압. 비압축: 영역 오른쪽 위 셀 (먼 공기) 의 압력
@@ -367,6 +371,10 @@ EntryOut run_entry_impl(const EntrySetup& es) {
       out.floor_cells.push_back(0.0);
       out.gap_axis.push_back(0.0);
       if (es.cv) cv_prev = cv_terms(g, s.flow(), s.vof().f(), s.fluid_fraction(t), es.cv_rs * kA, es.cv_zb * kA, es.cv_zt * kA);
+      if (es.swept_diag) {
+        phi_prev = s.fluid_fraction(t);
+        f_prev_vof = s.vof().f();
+      }
       f_prev = 0.0;
       t_prev = t;
       have_prev = true;
@@ -471,6 +479,21 @@ EntryOut run_entry_impl(const EntrySetup& es) {
         const double fcv = 0.5 * (cv_prev.surface + c.surface) - (c.momentum - cv_prev.momentum) / dt;
         out.fs_half.push_back(0.5 * (f_prev + force));
         out.fcv_half.push_back(fcv);
+        if (es.swept_diag) {
+          // 줄어든 유체 비율만큼의 질량 × 물체 속도 (−V). 이 운동량이 제어면 운동량에서 빠지면 F_cv 가
+          // 그만큼 작게 나온다 (개발용 진단, 판정 지표 아님)
+          double swept = 0.0;
+          for (int i = 0; i < g.nr; ++i) {
+            for (int j = 0; j < g.nz; ++j) {
+              const double dphi = phi_prev(i, j) - phi(i, j);
+              if (!(dphi > 0.0)) continue;
+              const double ph = phi_prev(i, j);
+              const double fw = ph > 1e-12 ? std::clamp(f_prev_vof(i, j) / ph, 0.0, 1.0) : 0.0;
+              swept += dphi * g.cell_volume(i, j) * (fw * kRhoW + (1.0 - fw) * kRhoA);
+            }
+          }
+          out.swept_half.push_back(swept * kV * (planar ? 1.0 : 2.0 * kPi) / dt);
+        }
         out.impulse_cv += fcv * dt;
         cv_prev = c;
       }
@@ -480,6 +503,10 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     f_prev = force;
     t_prev = t;
     have_prev = true;
+    if (es.swept_diag) {
+      phi_prev = phi;
+      f_prev_vof = s.vof().f();
+    }
   };
 
   try {
@@ -612,6 +639,7 @@ TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_f
   es.stretched = stretched;
   es.water_floor = water_floor;
   es.cv = true;
+  es.swept_diag = !history_csv.empty();
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
   if (o.run.failure.empty()) {
@@ -635,10 +663,10 @@ TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_f
     rep.notes.push_back("F_s / F_cv (N) at half steps: " + hs);
     if (!history_csv.empty()) {  // 반 단계마다 두 힘 전체 이력 (3-F 차이가 생기는 시점 확인용)
       std::ofstream h(history_csv);
-      h << "t_mid,dt,f_s,f_cv,gap_axis,p_bottom,p_min_abs\n";
+      h << "t_mid,dt,f_s,f_cv,swept,gap_axis,p_bottom,p_min_abs\n";
       for (std::size_t k = 0; k < o.fs_half.size(); ++k) {
         h << 0.5 * (o.t[k] + o.t[k + 1]) << "," << o.t[k + 1] - o.t[k] << "," << o.fs_half[k] << "," << o.fcv_half[k]
-          << "," << o.gap_axis[k + 1] << "," << o.p_bottom[k + 1] << "," << o.p_min_abs[k + 1] << "\n";
+          << "," << o.swept_half[k] << "," << o.gap_axis[k + 1] << "," << o.p_bottom[k + 1] << "," << o.p_min_abs[k + 1] << "\n";
       }
       rep.notes.push_back("half-step force history written to " + history_csv);
     }
