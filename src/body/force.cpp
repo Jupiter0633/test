@@ -180,6 +180,10 @@ double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const 
   return g.geometry == flow::Geometry::Axisymmetric ? kTwoPi * f : f;
 }
 
+double piece_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p, const BoundaryPiece& piece) {
+  return extrapolate(g, geom, p, piece.i, piece.j, piece.r, piece.z);
+}
+
 double average_surface_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p,
                                 const std::function<bool(const BoundaryPiece&)>& select) {
   double sp = 0.0, sa = 0.0;

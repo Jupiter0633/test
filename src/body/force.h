@@ -16,6 +16,9 @@ namespace hcw::body {
 // geom.active 가 거짓인 셀은 압력이 없는 것으로 보고, 그런 셀의 조각은 주변 유효 셀의 1차식으로 구한다.
 double axial_pressure_force(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p);
 
+// 조각 하나의 대표점 압력 (axial_pressure_force 와 같은 외삽). 개발용 진단에서 조각별 기여를 볼 때 쓴다.
+double piece_pressure(const flow::Grid& g, const CutGeometry& geom, const flow::Array2D& p, const BoundaryPiece& piece);
+
 // 축 방향 점성 힘 (no-slip 강체 표면). 벽에서 점성 견인력 = μ ∂u/∂n (n: 물체 바깥 법선) 이므로
 // z 성분은 μ ∂u_z/∂n. 경계 조각 대표점 근처(3Δ 안)의 유체 쪽 z 면 속도로
 // u_z − W ≈ d (c1 + c2 t + c3 d + c4 d² + c5 t²) (d: 표면까지 거리, t: 접선 거리) 를 최소제곱으로 맞추고

@@ -58,7 +58,8 @@ struct EntrySetup {
   double tol_factor = 1.0;
   double kappa = 1.4;  // 0 이면 비압축 공기
   bool cv = false;     // 3-F 제어면 운동량 수지
-  bool swept_diag = false;  // 개발용 진단: 물체가 쓸고 지나간 셀의 운동량 (entry-dt 전용)
+  bool swept_diag = false;  // 개발용 진단: 물체가 쓸고 지나간 셀의 운동량, 힘 튐 조각 표 (entry-dt 전용)
+  std::string spike_prefix;  // 힘 튐 조각 표 파일 이름 앞부분
   double cv_rs = 2.0, cv_zb = -2.0, cv_zt = 1.25;
   // 개발용 그림 자료: 비어 있지 않으면 snapshot_interval [s] 마다 셀 값을 이 폴더에 CSV 로 쓴다
   std::string snapshot_dir;
@@ -348,6 +349,8 @@ EntryOut run_entry_impl(const EntrySetup& es) {
   CvTerms cv_prev;
   bool have_prev = false;
   Array2D phi_prev, f_prev_vof;  // 개발용 진단 (swept_half) 의 직전 단계 값
+  std::vector<std::string> prev_rows;  // 개발용 진단: 직전 단계의 조각별 압력 힘 표
+  int spike_dumps = 0;
 
   auto gauge_ref = [&]() {
     // 압축성: 대기압. 비압축: 영역 오른쪽 위 셀 (먼 공기) 의 압력
@@ -385,8 +388,52 @@ EntryOut run_entry_impl(const EntrySetup& es) {
     // 대기압이 걸린다고 보는 것과 같다. 물체 전체가 영역 안이면 결과는 같다 (닫힌 표면의 상수 압력 합력 0).
     Array2D p_gauge = p;
     for (double& v : p_gauge.data()) v -= ref;
-    const double force = body::axial_pressure_force(g, geom, p_gauge) +
-                         body::axial_viscous_force(g, geom, *shape, zc, s.flow().w(), kMuW, -kV);
+    const double force_p = body::axial_pressure_force(g, geom, p_gauge);
+    const double force_v = body::axial_viscous_force(g, geom, *shape, zc, s.flow().w(), kMuW, -kV);
+    const double force = force_p + force_v;
+    if (es.swept_diag) {
+      // 개발용 진단: 조각별 압력 힘 기여. 힘이 한 단계에 크게 바뀌면 직전 단계와 이번 단계 표를 파일로 쓴다.
+      std::vector<std::string> rows;
+      rows.reserve(geom.pieces.size());
+      for (const auto& pc : geom.pieces) {
+        const double pe = body::piece_pressure(g, geom, p_gauge, pc);
+        const bool act = geom.active[static_cast<std::size_t>(pc.i) * g.nz + pc.j] != 0;
+        const double ph = s.vof().f()(pc.i, pc.j);
+        char line[480];
+        std::snprintf(line, sizeof(line), "%d,%d,%.6g,%.6g,%.6g,%.6g,%d,%.6g,%.6g,%.6g,%.6g", pc.i, pc.j, pc.r / kA,
+                      (pc.z - zc) / kA, pc.nz_area, pc.length, act ? 1 : 0, ph, act ? p_gauge(pc.i, pc.j) : 0.0, pe,
+                      (planar ? 1.0 : 2.0 * kPi) * pe * pc.nz_area);
+        std::string row = line;
+        // 아래 세 셀 (j−1, j−2, j−3): 유효 여부, 물 비율, 게이지 압력, 셀 중심 z (물체 바닥 기준 / a)
+        for (int d = 1; d <= 3; ++d) {
+          const int jj = pc.j - d;
+          if (jj < 0) {
+            row += ",0,0,0,0";
+            continue;
+          }
+          const bool a2 = geom.active[static_cast<std::size_t>(pc.i) * g.nz + jj] != 0;
+          std::snprintf(line, sizeof(line), ",%d,%.3g,%.6g,%.4g", a2 ? 1 : 0, s.vof().f()(pc.i, jj),
+                        a2 ? p_gauge(pc.i, jj) : 0.0, (g.zc(jj) - pc.z) / kA);
+          row += line;
+        }
+        rows.push_back(std::move(row));
+      }
+      if (have_prev && spike_dumps < 12 && std::abs(force - f_prev) > 1000.0) {
+        char name[64];
+        std::snprintf(name, sizeof(name), ".spike%02d.csv", spike_dumps++);
+        std::ofstream o(es.spike_prefix + name);
+        o << "# t_prev=" << t_prev << " t=" << t << " F_prev=" << f_prev << " F=" << force << " F_p=" << force_p
+          << " F_v=" << force_v << " zc=" << zc << "\n";
+        o << "step,i,j,r_over_a,z_rel_over_a,nz_area,length,active,f_water,p_cell,p_piece,contrib";
+        for (int d = 1; d <= 3; ++d) {
+          o << ",act_m" << d << ",fw_m" << d << ",p_m" << d << ",dz_m" << d;
+        }
+        o << "\n";
+        for (const auto& r : prev_rows) o << "prev," << r << "\n";
+        for (const auto& r : rows) o << "now," << r << "\n";
+      }
+      prev_rows = std::move(rows);
+    }
     auto bottom = [&](double rmax) {
       return [=](const body::BoundaryPiece& pc) { return pc.nz_area > 0.0 && pc.z < zc && pc.r <= rmax; };
     };
@@ -640,6 +687,7 @@ TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_f
   es.water_floor = water_floor;
   es.cv = true;
   es.swept_diag = !history_csv.empty();
+  es.spike_prefix = history_csv;
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
   if (o.run.failure.empty()) {
