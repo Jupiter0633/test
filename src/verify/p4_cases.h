@@ -25,7 +25,8 @@ TestReport run_3i(bool quick);
 // 3-F 의 제어면 힘도 함께 구해 충격량·첨두값·두 힘의 차이와 시간 이력을 돌려준다 (verdict = DEV_ONLY).
 // 시간 간격 수렴 실험 (P4-analysis-2026-10-23.md) 용.
 // stretched = true 이면 P4 새 조건의 늘어나는 격자 (n = a/Δ_core). dt_factor 는 그대로 곱한다.
-TestReport entry_dev_study(int n, double dt_factor, bool stretched = false);
+// water_floor = false 이면 물 압력 하한을 끈다 (3-F 원인 비교용)
+TestReport entry_dev_study(int n, double dt_factor, bool stretched = false, bool water_floor = true);
 
 // 개발용 그림 자료: 위와 같은 원판 입수를 계산하며 interval [s] 마다 셀 값 (snap_NNN.csv) 과
 // 끝에 시간 이력 (history.csv: t, 힘, 바닥 평균 압력, 포켓 압력) 을 dir 에 쓴다. 그림은 tools/plot_entry.py.

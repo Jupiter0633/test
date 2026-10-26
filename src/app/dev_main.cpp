@@ -33,8 +33,12 @@ int main(int argc, char** argv) {
   std::string thread_error;
   int threads = parallel::threads_from_environment(thread_error);
   bool stretched = false;  // P4 새 조건의 늘어나는 격자 (n = a/Δ_core)
+  bool water_floor = true;  // --no-water-floor: 물 압력 하한 끔 (entry-dt 개발 비교용)
   for (auto it = args.begin(); it != args.end();) {
-    if (*it == "--stretched") {
+    if (*it == "--no-water-floor") {
+      water_floor = false;
+      it = args.erase(it);
+    } else if (*it == "--stretched") {
       stretched = true;
       it = args.erase(it);
     } else if (*it == "--threads") {
@@ -75,7 +79,7 @@ int main(int argc, char** argv) {
   const verify::TestReport rep =
       snap ? verify::entry_dev_snapshots(n, f, args[3], 1e-3 * std::atof(args[4].c_str()),
                                          !(args.size() == 6 && args[5] == "no-water-floor"), stretched)
-           : verify::entry_dev_study(n, f, stretched);
+           : verify::entry_dev_study(n, f, stretched, water_floor);
   for (const auto& r : rep.runs) {
     std::cout << "[" << r.label << "]" << (r.failure.empty() ? "" : "  " + r.failure) << "\n";
     for (const auto& [k, v] : r.metrics) std::cout << "  " << k << " = " << v << "\n";

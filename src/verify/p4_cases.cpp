@@ -604,12 +604,13 @@ bool gci_fine(double phi1, double phi2, double phi3, double& gci, double& p) {
 }
 
 // ---------------------------------------------------------------- 개발용
-TestReport entry_dev_study(int n, double dt_factor, bool stretched) {
+TestReport entry_dev_study(int n, double dt_factor, bool stretched, bool water_floor) {
   TestReport rep = p4_report("dev-dt", "Disk entry time-step study (development only, not a verdict)");
   EntrySetup es;
   es.n = n;
   es.dt_factor = dt_factor;
   es.stretched = stretched;
+  es.water_floor = water_floor;
   es.cv = true;
   EntryOut o = run_entry(es);
   o.run.label = label_of(es) + " dt x " + fmt(dt_factor);
